@@ -1,0 +1,8 @@
+{
+  "name": "Smog Shield",
+  "description": "A GenAI-powered Flutter assistant that helps families and communities navigate severe winter smog and urban air pollution.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

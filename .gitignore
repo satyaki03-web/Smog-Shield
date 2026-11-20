@@ -1,0 +1,40 @@
+# Node and Vite build artifacts
+node_modules/
+dist/
+server.js
+
+# Dart and Flutter generated files
+.dart_tool/
+.packages
+.pub-cache/
+.pub/
+build/
+coverage/
+doc/api/
+
+# IDE and OS files
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+.DS_Store
+
+# Secrets and local environment files
+.env
+.env.*
+!.env.example
+*.key
+*.keys
+*.jks
+*.keystore
+local.properties
+key.properties
+
+# Android and Web build artifacts
+android/.gradle/
+android/app/debug/
+android/app/profile/
+android/app/release/
+android/local.properties
+web/flutter_service_worker.js
