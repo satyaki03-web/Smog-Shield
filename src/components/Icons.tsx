@@ -1,5 +1,4 @@
-import React from 'react';
-import type { BandInfo } from '../smogEngine';
+import type { BandInfo } from '../types';
 
 interface IconProps {
   className?: string;

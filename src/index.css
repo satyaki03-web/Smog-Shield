@@ -21,6 +21,7 @@
   --band-very-poor: #9C2F23;
   --band-severe: #6E1A1A;
   --border-width-card: 1px;
+  --focus-ring-width: 2px;
 }
 
 [data-theme="dark"] {
@@ -43,28 +44,31 @@
   --band-very-poor: #E86D61;
   --band-severe: #F08A8A;
   --border-width-card: 1px;
+  --focus-ring-width: 2px;
 }
 
+/* WCAG AAA High Contrast theme (>= 7:1 text contrast on all surfaces, crisp 2px borders) */
 [data-theme="high-contrast"] {
   --bg-canvas: #FFFFFF;
   --bg-surface: #FFFFFF;
-  --bg-recessed: #F4F4F4;
-  --bg-selected: #E6F4F3;
+  --bg-recessed: #F2F2F2;
+  --bg-selected: #E1F2F0;
   --border-subtle: #000000;
-  --border-strong: #0B4F4A;
+  --border-strong: #003D38;
   --ink-primary: #000000;
-  --ink-secondary: #1A1A1A;
-  --ink-muted: #262626;
-  --accent-primary: #0B4F4A;
+  --ink-secondary: #0F0F0F;
+  --ink-muted: #1A1A1A;
+  --accent-primary: #004742;
   --accent-primary-ink: #FFFFFF;
-  --accent-clay: #8F2B0D;
-  --band-good: #0A542B;
-  --band-satisfactory: #2D5A13;
-  --band-moderate: #704900;
-  --band-poor: #8F2B0D;
-  --band-very-poor: #7A120A;
-  --band-severe: #4F0000;
+  --accent-clay: #7A1E00;
+  --band-good: #004D23;
+  --band-satisfactory: #1E4B00;
+  --band-moderate: #593800;
+  --band-poor: #7A1E00;
+  --band-very-poor: #6B0800;
+  --band-severe: #4A0000;
   --border-width-card: 2px;
+  --focus-ring-width: 3px;
 }
 
 @layer base {
@@ -94,10 +98,29 @@
   a:focus-visible,
   input:focus-visible,
   select:focus-visible,
-  textarea:focus-visible {
-    outline: 2px solid var(--border-strong);
+  textarea:focus-visible,
+  [tabindex]:focus-visible {
+    outline: var(--focus-ring-width) solid var(--border-strong);
     outline-offset: 2px;
   }
+}
+
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 60;
+  padding: 0.75rem 1.25rem;
+  font-weight: 700;
+  border-radius: 6px;
+  background-color: var(--accent-primary);
+  color: var(--accent-primary-ink);
+  text-decoration: none;
+}
+
+.skip-link:focus {
+  left: 1rem;
+  top: 0.75rem;
 }
 
 .tabular-nums {
@@ -143,9 +166,18 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
   .ask-progress-bar {
     animation: none;
     width: 100%;
-    opacity: 0.55;
+    opacity: 0.65;
   }
 }

@@ -1,441 +1,24 @@
-export type AqiBand =
-  | 'good'
-  | 'satisfactory'
-  | 'moderate'
-  | 'poor'
-  | 'veryPoor'
-  | 'severe';
+import type {
+  AirReading,
+  AqiBand,
+  ChecklistItem,
+  Recommendation,
+  RecommendationBundle,
+  UserProfile,
+} from '../types';
+import { findTwoHourWindows, getBandInfo, getVulnerabilityMultiplier } from './aqi';
 
-export type Sensitivity = 'asthma' | 'heart' | 'pregnancy' | 'copd';
-export type CommuteMode = 'twoWheeler' | 'car' | 'publicTransit' | 'walkOrCycle' | 'workFromHome';
-export type CookingFuel = 'lpg' | 'pipedGas' | 'induction' | 'biomassOrWood';
-export type HomeType = 'apartment' | 'independentHouse' | 'groundFloorRoadside';
-export type BudgetTier = 'lowCost' | 'moderate' | 'flexible';
-export type ThemeMode = 'light' | 'dark' | 'high-contrast';
-
-export interface CityInfo {
-  id: string;
-  name: string;
-  region: string;
-  lat: number;
-  lon: number;
-  fallbackAqi: number;
-  fallbackPm25: number;
-  fallbackPm10: number;
-}
-
-export interface UserProfile {
-  cityId: string;
-  adults: number;
-  children: number;
-  elders: number;
-  sensitivities: Sensitivity[];
-  commute: CommuteMode;
-  cookingFuel: CookingFuel;
-  homeType: HomeType;
-  hasPurifier: boolean;
-  budget: BudgetTier;
-  manualAqi: number | null;
-}
-
-export interface HourlyPoint {
-  timeIso: string;
-  hourLabel: string;
-  aqi: number;
-  pm25: number;
-  pm10: number;
-}
-
-export interface AirReading {
-  city: CityInfo;
-  aqi: number;
-  pm25: number;
-  pm10: number;
-  fetchedAtIso: string;
-  source: 'live' | 'manual' | 'offline';
-  hourly: HourlyPoint[];
-}
-
-export interface BandInfo {
-  band: AqiBand;
-  label: string;
-  rangeLabel: string;
-  summary: string;
-  maskGuidance: string;
-  cssVar: string;
-  shape: 'circle' | 'roundedSquare' | 'diamond' | 'triangle' | 'octagon' | 'alertHex';
-}
-
-export interface TimeWindow {
-  startLabel: string;
-  endLabel: string;
-  averageAqi: number;
-}
-
-export interface Recommendation {
-  id: string;
-  category: 'routine' | 'indoor' | 'swap';
-  priority: number;
-  title: string;
-  action: string;
-  timingOrCost: string;
-  exposureImpact: string;
-  emissionsImpact: string;
-  basis: string;
-}
-
-export interface ChecklistItem {
-  id: string;
-  group: 'RWA' | 'School' | 'Household';
-  text: string;
-}
-
-export const CITIES: CityInfo[] = [
-  { id: 'delhi', name: 'Delhi', region: 'Delhi NCR', lat: 28.6139, lon: 77.209, fallbackAqi: 342, fallbackPm25: 178, fallbackPm10: 295 },
-  { id: 'gurugram', name: 'Gurugram', region: 'Delhi NCR', lat: 28.4595, lon: 77.0266, fallbackAqi: 318, fallbackPm25: 158, fallbackPm10: 270 },
-  { id: 'noida', name: 'Noida', region: 'Delhi NCR', lat: 28.5355, lon: 77.391, fallbackAqi: 336, fallbackPm25: 171, fallbackPm10: 288 },
-  { id: 'ghaziabad', name: 'Ghaziabad', region: 'Delhi NCR', lat: 28.6692, lon: 77.4538, fallbackAqi: 355, fallbackPm25: 186, fallbackPm10: 310 },
-  { id: 'faridabad', name: 'Faridabad', region: 'Delhi NCR', lat: 28.4089, lon: 77.3178, fallbackAqi: 325, fallbackPm25: 164, fallbackPm10: 278 },
-  { id: 'lucknow', name: 'Lucknow', region: 'Uttar Pradesh', lat: 26.8467, lon: 80.9462, fallbackAqi: 264, fallbackPm25: 122, fallbackPm10: 218 },
-  { id: 'kanpur', name: 'Kanpur', region: 'Uttar Pradesh', lat: 26.4499, lon: 80.3319, fallbackAqi: 282, fallbackPm25: 134, fallbackPm10: 235 },
-  { id: 'patna', name: 'Patna', region: 'Bihar', lat: 25.5941, lon: 85.1376, fallbackAqi: 295, fallbackPm25: 142, fallbackPm10: 248 },
-  { id: 'varanasi', name: 'Varanasi', region: 'Uttar Pradesh', lat: 25.3176, lon: 82.9739, fallbackAqi: 248, fallbackPm25: 112, fallbackPm10: 204 },
-  { id: 'chandigarh', name: 'Chandigarh', region: 'Punjab / Haryana', lat: 30.7333, lon: 76.7794, fallbackAqi: 196, fallbackPm25: 86, fallbackPm10: 154 },
-  { id: 'amritsar', name: 'Amritsar', region: 'Punjab', lat: 31.634, lon: 74.8723, fallbackAqi: 242, fallbackPm25: 109, fallbackPm10: 196 },
-  { id: 'jaipur', name: 'Jaipur', region: 'Rajasthan', lat: 26.9124, lon: 75.7873, fallbackAqi: 188, fallbackPm25: 82, fallbackPm10: 162 },
-  { id: 'kolkata', name: 'Kolkata', region: 'West Bengal', lat: 22.5726, lon: 88.3639, fallbackAqi: 218, fallbackPm25: 98, fallbackPm10: 175 },
-  { id: 'mumbai', name: 'Mumbai', region: 'Maharashtra', lat: 19.076, lon: 72.8777, fallbackAqi: 146, fallbackPm25: 56, fallbackPm10: 118 },
-  { id: 'bengaluru', name: 'Bengaluru', region: 'Karnataka', lat: 12.9716, lon: 77.5946, fallbackAqi: 84, fallbackPm25: 28, fallbackPm10: 62 },
-];
-
-export const DEFAULT_PROFILE: UserProfile = {
-  cityId: 'delhi',
-  adults: 2,
-  children: 1,
-  elders: 1,
-  sensitivities: ['asthma'],
-  commute: 'twoWheeler',
-  cookingFuel: 'lpg',
-  homeType: 'apartment',
-  hasPurifier: false,
-  budget: 'lowCost',
-  manualAqi: null,
-};
-
-/** Maximum valid AQI value on the 0 to 500 scale. */
-export const MAX_AQI = 500;
-/** Timeout in milliseconds for live Open-Meteo air quality requests. */
-export const OPEN_METEO_TIMEOUT_MS = 10_000;
-/** Cache TTL in milliseconds for live Open-Meteo readings. */
-export const AIR_CACHE_TTL_MS = 10 * 60 * 1000;
-
-/** Resolves a curated city by ID, falling back to Delhi. */
-export function getCityById(id: string): CityInfo {
-  return CITIES.find((c) => c.id === id) ?? CITIES[0];
-}
-
-/** Maps a numeric AQI value onto its Indian CPCB band metadata. */
-export function getBandInfo(aqi: number): BandInfo {
-  const value = Math.max(0, Math.round(aqi));
-  if (value <= 50) {
-    return {
-      band: 'good',
-      label: 'Good',
-      rangeLabel: '0 to 50',
-      summary: 'Air is clean for outdoor routines, school play, and full cross-ventilation.',
-      maskGuidance: 'No mask needed for ambient air.',
-      cssVar: 'var(--band-good)',
-      shape: 'circle',
-    };
-  }
-  if (value <= 100) {
-    return {
-      band: 'satisfactory',
-      label: 'Satisfactory',
-      rangeLabel: '51 to 100',
-      summary: 'Acceptable for most people; keep quick-relief inhalers handy for sensitive lungs.',
-      maskGuidance: 'Optional near busy traffic junctions.',
-      cssVar: 'var(--band-satisfactory)',
-      shape: 'roundedSquare',
-    };
-  }
-  if (value <= 200) {
-    return {
-      band: 'moderate',
-      label: 'Moderate',
-      rangeLabel: '101 to 200',
-      summary: 'Fine particles begin irritating airways during brisk exercise and peak traffic hours.',
-      maskGuidance: 'Well-fitted N95 recommended for two-wheeler rides and sensitive members.',
-      cssVar: 'var(--band-moderate)',
-      shape: 'diamond',
-    };
-  }
-  if (value <= 300) {
-    return {
-      band: 'poor',
-      label: 'Poor',
-      rangeLabel: '201 to 300',
-      summary: 'Prolonged outdoor exposure causes breathing discomfort for most residents.',
-      maskGuidance: 'Well-fitted N95 or FFP2 mask for all outdoor errands and commutes.',
-      cssVar: 'var(--band-poor)',
-      shape: 'triangle',
-    };
-  }
-  if (value <= 400) {
-    return {
-      band: 'veryPoor',
-      label: 'Very Poor',
-      rangeLabel: '301 to 400',
-      summary: 'High winter smog burden. Move exercise indoors and shorten outdoor trips.',
-      maskGuidance: 'Snug N95 or FFP2 mask required outdoors; check nose-bridge seal.',
-      cssVar: 'var(--band-very-poor)',
-      shape: 'octagon',
-    };
-  }
-  return {
-    band: 'severe',
-    label: 'Severe',
-    rangeLabel: '401 and above',
-    summary: 'Health alert for everyone. Keep windows sealed outside brief midday airing and avoid outdoor exertion.',
-    maskGuidance: 'Strict N95 or FFP2 mask for unavoidable travel; avoid outdoor play for children.',
-    cssVar: 'var(--band-severe)',
-    shape: 'alertHex',
-  };
-}
-
-export function getVulnerabilityMultiplier(profile: UserProfile): number {
-  let factor = 1.0;
-  if (profile.children > 0) factor += 0.25;
-  if (profile.elders > 0) factor += 0.25;
-  if (profile.sensitivities.includes('asthma') || profile.sensitivities.includes('copd')) factor += 0.35;
-  if (profile.sensitivities.includes('heart')) factor += 0.25;
-  if (profile.sensitivities.includes('pregnancy')) factor += 0.2;
-  return Math.min(2.0, Number(factor.toFixed(2)));
-}
-
-export function getAtRiskSummary(profile: UserProfile, band: AqiBand): string[] {
-  const groups: string[] = [];
-  if (profile.children > 0) {
-    groups.push(
-      `${profile.children} ${profile.children === 1 ? 'child' : 'children'} (faster breathing rate per kg body weight)`
-    );
-  }
-  if (profile.elders > 0) {
-    groups.push(
-      `${profile.elders} ${profile.elders === 1 ? 'elder' : 'elders'} (higher cardiovascular sensitivity to PM2.5)`
-    );
-  }
-  if (profile.sensitivities.includes('asthma')) groups.push('Asthma management (keep rescue inhaler accessible)');
-  if (profile.sensitivities.includes('copd')) groups.push('COPD sensitivity (avoid cold morning smog peaks)');
-  if (profile.sensitivities.includes('heart')) groups.push('Heart condition (skip heavy outdoor exertion)');
-  if (profile.sensitivities.includes('pregnancy')) groups.push('Pregnancy (prioritize clean bedroom air overnight)');
-  if (groups.length === 0) {
-    if (band === 'veryPoor' || band === 'severe') {
-      groups.push('All healthy adults are affected at this smog level');
-    } else {
-      groups.push('General household (standard precautions apply)');
-    }
-  }
-  return groups;
-}
-
-export function formatHourLabel(date: Date): string {
-  const h = date.getHours();
-  const suffix = h >= 12 ? 'PM' : 'AM';
-  const hour12 = h % 12 === 0 ? 12 : h % 12;
-  return `${hour12}:00 ${suffix}`;
-}
-
-export function buildFallbackHourly(baseAqi: number, basePm25: number, basePm10: number): HourlyPoint[] {
-  // Typical Indo-Gangetic winter diurnal curve: higher night/early morning inversion, lower afternoon (1 PM - 4 PM).
-  const multipliers = [
-    1.18, 1.2, 1.22, 1.18, 1.15, 1.12, 1.16, 1.14, 1.04, 0.94, 0.85, 0.78,
-    0.72, 0.68, 0.69, 0.74, 0.82, 0.94, 1.06, 1.14, 1.18, 1.2, 1.19, 1.17,
-  ];
-  const now = new Date();
-  now.setMinutes(0, 0, 0);
-  const points: HourlyPoint[] = [];
-  for (let i = 0; i < 24; i++) {
-    const t = new Date(now.getTime() + i * 3600 * 1000);
-    const m = multipliers[t.getHours()];
-    points.push({
-      timeIso: t.toISOString(),
-      hourLabel: formatHourLabel(t),
-      aqi: Math.min(500, Math.max(15, Math.round(baseAqi * m))),
-      pm25: Math.max(5, Math.round(basePm25 * m)),
-      pm10: Math.max(10, Math.round(basePm10 * m)),
-    });
-  }
-  return points;
-}
-
-export function findTwoHourWindows(hourly: HourlyPoint[]): {
-  cleanest: TimeWindow | null;
-  worst: TimeWindow | null;
-} {
-  if (hourly.length === 0) return { cleanest: null, worst: null };
-  if (hourly.length === 1) {
-    const single: TimeWindow = {
-      startLabel: hourly[0].hourLabel,
-      endLabel: hourly[0].hourLabel,
-      averageAqi: hourly[0].aqi,
-    };
-    return { cleanest: single, worst: single };
-  }
-  const limit = Math.min(hourly.length, 24);
-  let bestIdx = 0;
-  let worstIdx = 0;
-  let bestAvg = Number.POSITIVE_INFINITY;
-  let worstAvg = Number.NEGATIVE_INFINITY;
-
-  for (let i = 0; i < limit - 1; i++) {
-    const avg = Math.round((hourly[i].aqi + hourly[i + 1].aqi) / 2);
-    if (avg < bestAvg) {
-      bestAvg = avg;
-      bestIdx = i;
-    }
-    if (avg > worstAvg) {
-      worstAvg = avg;
-      worstIdx = i;
-    }
-  }
-
-  const endLabelFor = (index: number): string => {
-    const endDate = new Date(hourly[index + 1].timeIso);
-    endDate.setHours(endDate.getHours() + 1);
-    return Number.isNaN(endDate.getTime()) ? hourly[index + 1].hourLabel : formatHourLabel(endDate);
-  };
-
-  return {
-    cleanest: {
-      startLabel: hourly[bestIdx].hourLabel,
-      endLabel: endLabelFor(bestIdx),
-      averageAqi: bestAvg,
-    },
-    worst: {
-      startLabel: hourly[worstIdx].hourLabel,
-      endLabel: endLabelFor(worstIdx),
-      averageAqi: worstAvg,
-    },
-  };
-}
-
-interface CacheEntry {
-  reading: AirReading;
-  expiresAt: number;
-}
-
-const airCache = new Map<string, CacheEntry>();
-
-/** Clears the in-memory Open-Meteo air quality cache. */
-export function clearAirCache(): void {
-  airCache.clear();
-}
-
-/** Fetches live Open-Meteo air quality with 10s timeout, 10m cache, and offline seasonal fallback. */
-export async function fetchAirQuality(
-  city: CityInfo,
-  manualAqi: number | null,
-  forceRefresh = false,
-  options?: { fetchImpl?: typeof fetch; timeoutMs?: number }
-): Promise<AirReading> {
-  if (manualAqi !== null && manualAqi >= 0 && manualAqi <= MAX_AQI) {
-    const estPm25 = Math.round(manualAqi * 0.52);
-    const estPm10 = Math.round(manualAqi * 0.85);
-    return {
-      city,
-      aqi: manualAqi,
-      pm25: estPm25,
-      pm10: estPm10,
-      fetchedAtIso: new Date().toISOString(),
-      source: 'manual',
-      hourly: buildFallbackHourly(manualAqi, estPm25, estPm10),
-    };
-  }
-
-  const cached = airCache.get(city.id);
-  if (!forceRefresh && cached && Date.now() < cached.expiresAt) {
-    return cached.reading;
-  }
-
-  const fetchImpl = options?.fetchImpl ?? fetch;
-  const timeoutMs = options?.timeoutMs ?? OPEN_METEO_TIMEOUT_MS;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const url =
-      `https://air-quality-api.open-meteo.com/v1/air-quality` +
-      `?latitude=${city.lat}&longitude=${city.lon}` +
-      `&current=us_aqi,pm2_5,pm10&hourly=us_aqi,pm2_5,pm10&forecast_days=2&timezone=auto`;
-    const res = await fetchImpl(url, { signal: controller.signal });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = (await res.json()) as {
-      current?: { us_aqi?: unknown; pm2_5?: unknown; pm10?: unknown };
-      hourly?: { time?: unknown; us_aqi?: unknown; pm2_5?: unknown; pm10?: unknown };
-    };
-    const rawAqi = Number(data?.current?.us_aqi ?? city.fallbackAqi);
-    const rawPm25 = Number(data?.current?.pm2_5 ?? city.fallbackPm25);
-    const rawPm10 = Number(data?.current?.pm10 ?? city.fallbackPm10);
-    const currentAqi = Number.isFinite(rawAqi) ? Math.min(MAX_AQI, Math.max(0, Math.round(rawAqi))) : city.fallbackAqi;
-    const currentPm25 = Number.isFinite(rawPm25) ? Math.max(0, Math.round(rawPm25)) : city.fallbackPm25;
-    const currentPm10 = Number.isFinite(rawPm10) ? Math.max(0, Math.round(rawPm10)) : city.fallbackPm10;
-
-    const times: string[] = Array.isArray(data?.hourly?.time) ? (data.hourly.time as string[]) : [];
-    const aqis: number[] = Array.isArray(data?.hourly?.us_aqi) ? (data.hourly.us_aqi as number[]) : [];
-    const pm25s: number[] = Array.isArray(data?.hourly?.pm2_5) ? (data.hourly.pm2_5 as number[]) : [];
-    const pm10s: number[] = Array.isArray(data?.hourly?.pm10) ? (data.hourly.pm10 as number[]) : [];
-
-    const nowMs = Date.now() - 3600 * 1000;
-    const hourly: HourlyPoint[] = [];
-    for (let i = 0; i < times.length && hourly.length < 24; i++) {
-      const dt = new Date(times[i]);
-      if (Number.isNaN(dt.getTime()) || dt.getTime() < nowMs) continue;
-      const hAqi = Number(aqis[i] ?? currentAqi);
-      const hPm25 = Number(pm25s[i] ?? currentPm25);
-      const hPm10 = Number(pm10s[i] ?? currentPm10);
-      hourly.push({
-        timeIso: dt.toISOString(),
-        hourLabel: formatHourLabel(dt),
-        aqi: Number.isFinite(hAqi) ? Math.min(MAX_AQI, Math.max(0, Math.round(hAqi))) : currentAqi,
-        pm25: Number.isFinite(hPm25) ? Math.max(0, Math.round(hPm25)) : currentPm25,
-        pm10: Number.isFinite(hPm10) ? Math.max(0, Math.round(hPm10)) : currentPm10,
-      });
-    }
-
-    const reading: AirReading = {
-      city,
-      aqi: currentAqi,
-      pm25: currentPm25,
-      pm10: currentPm10,
-      fetchedAtIso: new Date().toISOString(),
-      source: 'live',
-      hourly: hourly.length >= 6 ? hourly : buildFallbackHourly(currentAqi, currentPm25, currentPm10),
-    };
-    airCache.set(city.id, { reading, expiresAt: Date.now() + AIR_CACHE_TTL_MS });
-    return reading;
-  } catch {
-    return {
-      city,
-      aqi: city.fallbackAqi,
-      pm25: city.fallbackPm25,
-      pm10: city.fallbackPm10,
-      fetchedAtIso: new Date().toISOString(),
-      source: 'offline',
-      hourly: buildFallbackHourly(city.fallbackAqi, city.fallbackPm25, city.fallbackPm10),
-    };
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
+/** Builds deterministically prioritized Routine, Indoor Air, and Swaps recommendations. */
 export function buildRecommendations(
   profile: UserProfile,
   reading: AirReading
-): { routine: Recommendation[]; indoor: Recommendation[]; swaps: Recommendation[] } {
+): RecommendationBundle {
   const bandInfo = getBandInfo(reading.aqi);
   const { cleanest, worst } = findTwoHourWindows(reading.hourly);
   const cleanStr = cleanest ? `${cleanest.startLabel} to ${cleanest.endLabel}` : '1:00 PM to 3:00 PM';
+  const cleanSlot = cleanest ? cleanest.timeOfDay : 'midday';
   const worstStr = worst ? `${worst.startLabel} to ${worst.endLabel}` : '6:00 AM to 8:00 AM';
+  const worstSlot = worst ? worst.timeOfDay : 'morning';
   const highRisk = getVulnerabilityMultiplier(profile) >= 1.25;
   const severeOrVeryPoor = bandInfo.band === 'veryPoor' || bandInfo.band === 'severe';
   const poorOrWorse = severeOrVeryPoor || bandInfo.band === 'poor';
@@ -445,16 +28,18 @@ export function buildRecommendations(
       id: 'routine-exercise',
       category: 'routine',
       priority: 1,
-      title: poorOrWorse ? 'Shift morning walk indoors' : 'Time outdoor walks for midday air',
+      title: poorOrWorse
+        ? `Shift ${worstSlot} walk indoors`
+        : `Time outdoor walks for ${cleanSlot} air`,
       action: poorOrWorse
         ? `Skip brisk outdoor exercise during ${worstStr}. Do 25 minutes of indoor stretching, stairs, or stationary cycling instead.`
-        : `Schedule outdoor walks during ${cleanStr} when boundary-layer mixing lowers surface PM2.5.`,
+        : `Schedule outdoor walks during ${cleanStr} (${cleanSlot} window) when air dispersion lowers surface PM2.5.`,
       timingOrCost: 'Zero cost | Daily routine',
       exposureImpact: poorOrWorse
         ? 'Cuts inhaled PM2.5 dose during exercise by 55% to 75% because deep breathing multiplies particle intake.'
-        : 'Reduces peak particulate exposure by 20% to 35% compared with early morning inversion hours.',
-      emissionsImpact: 'Indirect: avoids driving to distant parks when indoor movement works at home.',
-      basis: 'Minute ventilation increases 3x to 6x during brisk outdoor exercise; urban winter inversions peak between 5 AM and 9 AM.',
+        : 'Reduces peak particulate exposure by 20% to 35% compared with peak inversion hours.',
+      emissionsImpact: 'Indirect: avoids driving to distant parks when indoor or local movement works.',
+      basis: 'Minute ventilation increases 3x to 6x during brisk outdoor exercise; urban inversions trap particulates near ground level.',
     },
     {
       id: 'routine-mask',
@@ -476,10 +61,10 @@ export function buildRecommendations(
       id: 'routine-errands',
       category: 'routine',
       priority: 3,
-      title: profile.children > 0 ? 'Batch school run and market errands' : 'Combine errands into the cleanest window',
-      action: `Group pharmacy, grocery, and pickup trips inside ${cleanStr} instead of multiple evening runs during ${worstStr}.`,
+      title: profile.children > 0 ? 'Batch school run and market errands' : `Combine errands into the ${cleanSlot} window`,
+      action: `Group pharmacy, grocery, and pickup trips inside ${cleanStr} instead of multiple runs during ${worstStr}.`,
       timingOrCost: `Best window: ${cleanStr}`,
-      exposureImpact: 'Shortens total outdoor exposure time by 30% to 45% during high-inversion hours.',
+      exposureImpact: 'Shortens total outdoor exposure time by 30% to 45% during peak smog hours.',
       emissionsImpact: 'Eliminating two short cold-start trips cuts local tailpipe PM and NOx by roughly 40% for errand travel.',
       basis: 'Cold engines emit disproportionately higher hydrocarbons and particulates during the first 3 km of driving.',
     },
@@ -505,10 +90,12 @@ export function buildRecommendations(
       id: 'indoor-ventilate',
       category: 'indoor',
       priority: 1,
-      title: severeOrVeryPoor ? 'Seal windows now; air out only briefly at midday' : 'Cross-ventilate only during the cleanest window',
+      title: severeOrVeryPoor
+        ? `Seal windows now; air out briefly in the ${cleanSlot}`
+        : `Cross-ventilate only during the ${cleanSlot} window`,
       action: severeOrVeryPoor
         ? `Keep doors and balcony gaps closed with rolled damp towels or weather-strip tape. Open windows for just 15 to 20 minutes during ${cleanStr} to clear indoor CO2.`
-        : `Open opposite windows for 30 minutes during ${cleanStr} (avg AQI ${cleanest?.averageAqi ?? reading.aqi}), then close before evening smog rises.`,
+        : `Open opposite windows for 30 minutes during ${cleanStr} (avg AQI ${cleanest?.averageAqi ?? reading.aqi}), then close before smog rises around ${worstStr}.`,
       timingOrCost: `Air out: ${cleanStr}`,
       exposureImpact: 'Reduces outdoor-to-indoor PM2.5 infiltration by 30% to 50% while preventing stale indoor CO2 buildup.',
       emissionsImpact: 'Zero energy use; avoids running exhaust fans continuously against heavy outdoor smog.',
@@ -521,8 +108,8 @@ export function buildRecommendations(
       title: profile.hasPurifier
         ? 'Run HEPA purifier continuously in the main bedroom'
         : profile.budget === 'lowCost'
-        ? 'Build a clean-air sleeping room with DIY box-fan filter'
-        : 'Create one clean-air room with a true HEPA H13 purifier',
+          ? 'Build a clean-air sleeping room with DIY box-fan filter'
+          : 'Create one clean-air room with a true HEPA H13 purifier',
       action: profile.hasPurifier
         ? 'Place the purifier 30 cm away from walls, close bedroom doors, run on medium-high 1 hour before sleep, and vacuum the mesh pre-filter weekly.'
         : 'Focus on the smallest sleeping room used by children or elders. A true HEPA H13 unit (or a box fan taped cleanly to a MERV-13/HEPA replacement filter) cleans one closed room effectively.',
@@ -588,7 +175,7 @@ export function buildRecommendations(
       title: 'Protect your low-emission commute with quiet side streets',
       action:
         profile.commute === 'workFromHome'
-          ? 'Keep remote workdays on Severe smog alerts and shift deliveries to midday windows.'
+          ? `Keep remote workdays on Severe smog alerts and shift deliveries to the ${cleanSlot} window (${cleanStr}).`
           : 'Walk or cycle along inner colony lanes rather than arterial roads, and wear a fitted N95 when AQI exceeds 150.',
       timingOrCost: 'Zero cost | Route shift',
       exposureImpact: 'Stepping just 100 meters off a main arterial road drops black-carbon and ultrafine exposure by 30% to 50%.',
@@ -634,6 +221,7 @@ export function buildRecommendations(
   return { routine, indoor, swaps };
 }
 
+/** Returns the community, school, and household checklist tailored to the active AQI band. */
 export function getCommunityChecklist(band: AqiBand): ChecklistItem[] {
   const highAlert = band === 'poor' || band === 'veryPoor' || band === 'severe';
   return [
@@ -657,7 +245,7 @@ export function getCommunityChecklist(band: AqiBand): ChecklistItem[] {
       group: 'School',
       text: highAlert
         ? 'Move morning assembly and PE games indoors until AQI drops below 200.'
-        : 'Schedule outdoor sports for midday hours when smog dispersion is best.',
+        : 'Schedule outdoor sports for the cleanest daily window when smog dispersion is best.',
     },
     {
       id: 'chk-school-idling',
@@ -672,7 +260,12 @@ export function getCommunityChecklist(band: AqiBand): ChecklistItem[] {
   ];
 }
 
-export function buildPlanSummary(profile: UserProfile, reading: AirReading, personalizedTone: boolean): string {
+/** Builds a concise deterministic summary paragraph for the Today dashboard. */
+export function buildPlanSummary(
+  profile: UserProfile,
+  reading: AirReading,
+  personalizedTone: boolean
+): string {
   const band = getBandInfo(reading.aqi);
   const { cleanest, worst } = findTwoHourWindows(reading.hourly);
   const cleanStr = cleanest ? `${cleanest.startLabel} to ${cleanest.endLabel}` : '1:00 PM to 3:00 PM';
@@ -694,6 +287,7 @@ export function buildPlanSummary(profile: UserProfile, reading: AirReading, pers
   return `${reading.city.name} air quality is ${band.label} at AQI ${reading.aqi} (PM2.5 ${reading.pm25} ug/m3, PM10 ${reading.pm10} ug/m3). ${band.summary} Cleanest 2-hour window: ${cleanStr}. Peak smog window to avoid: ${worstStr}.`;
 }
 
+/** Produces an instant deterministic rule-engine answer for the Ask tab while Gemini runs or offline. */
 export function answerNeighbourQuestion(
   question: string,
   profile: UserProfile,
@@ -730,6 +324,7 @@ export function answerNeighbourQuestion(
   return `Based on ${reading.city.name} at AQI ${reading.aqi} (${band.label}, PM2.5 ${reading.pm25} ug/m3): keep heavy outdoor exertion indoors during ${worstStr}, air out briefly during ${cleanStr}, and wear a snug N95 outdoors. Ask about masks, windows, school play, budget purifiers, or RWA steps for specific advice.`;
 }
 
+/** Exports the household's daily smog action plan as shareable Markdown. */
 export function exportPlanMarkdown(profile: UserProfile, reading: AirReading): string {
   const band = getBandInfo(reading.aqi);
   const { cleanest, worst } = findTwoHourWindows(reading.hourly);
