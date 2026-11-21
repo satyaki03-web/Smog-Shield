@@ -214,7 +214,7 @@ function SmogShieldApp() {
   );
 
   return (
-    <div className="min-h-screen flex flex-col overflow-x-hidden">
+    <div className="min-h-screen flex flex-col overflow-x-clip">
       <a href="#main-content" className="skip-link">
         Skip to main content
       </a>

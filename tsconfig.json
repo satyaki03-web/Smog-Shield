@@ -25,5 +25,5 @@
     "allowImportingTsExtensions": true,
     "noEmit": true
   },
-  "exclude": ["dist", "coverage", "lib", "test", "web"]
+  "exclude": ["dist", "coverage", ".netlify"]
 }

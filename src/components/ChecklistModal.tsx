@@ -31,7 +31,7 @@ function ChecklistModalContent({
 
   return (
     <div
-      className="fixed inset-0 z-40 flex items-center justify-center p-4 overflow-y-auto"
+      className="fixed inset-0 z-40 flex items-center justify-center p-4"
       style={{ backgroundColor: 'rgba(15, 22, 19, 0.65)' }}
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
@@ -43,20 +43,23 @@ function ChecklistModalContent({
         aria-modal="true"
         aria-labelledby="checklist-modal-title"
         tabIndex={-1}
-        className="surface-card w-[calc(100vw-2rem)] sm:w-full max-w-[620px] max-h-[90dvh] overflow-y-auto overflow-x-hidden p-4 sm:p-6 min-w-0"
+        className="surface-card w-[calc(100%-2rem)] max-w-lg max-h-[90dvh] flex flex-col overflow-hidden min-w-0"
       >
         <div
-          className="flex items-start justify-between gap-4 pb-4 border-b"
+          className="flex items-start justify-between gap-3 px-4 sm:px-6 pt-4 sm:pt-5 pb-4 border-b shrink-0"
           style={{ borderColor: 'var(--border-subtle)' }}
         >
-          <div>
+          <div className="min-w-0">
             <p
               className="text-xs font-bold uppercase tracking-widest"
               style={{ color: 'var(--ink-muted)' }}
             >
               Community Action | {cityName} ({bandInfo.label})
             </p>
-            <h2 id="checklist-modal-title" className="text-2xl font-editorial font-medium mt-1">
+            <h2
+              id="checklist-modal-title"
+              className="text-xl sm:text-2xl font-editorial font-medium mt-1 leading-snug"
+            >
               RWA, School, and Home Checklist
             </h2>
           </div>
@@ -64,14 +67,14 @@ function ChecklistModalContent({
             type="button"
             aria-label="Close checklist"
             onClick={onClose}
-            className="min-w-[48px] min-h-[48px] flex items-center justify-center rounded-[6px] cursor-pointer shrink-0"
+            className="min-w-[44px] min-h-[44px] sm:min-w-[48px] sm:min-h-[48px] flex items-center justify-center rounded-[6px] cursor-pointer shrink-0"
             style={{ border: 'var(--border-width-card) solid var(--border-subtle)' }}
           >
             <CloseIcon />
           </button>
         </div>
 
-        <div className="mt-4 flex flex-col gap-3">
+        <div className="overflow-y-auto flex-1 px-4 sm:px-6 py-4 flex flex-col gap-3 min-w-0">
           {checklist.map((item) => (
             <SelectableCard
               key={item.id}
@@ -83,16 +86,19 @@ function ChecklistModalContent({
         </div>
 
         <div
-          className="mt-6 flex flex-wrap items-center justify-between gap-3 pt-4 border-t"
+          className="px-4 sm:px-6 py-3.5 border-t flex flex-wrap items-center justify-between gap-3 shrink-0"
           style={{ borderColor: 'var(--border-subtle)' }}
         >
-          <span className="text-sm font-bold tabular-nums" style={{ color: 'var(--ink-secondary)' }}>
+          <span
+            className="text-sm font-bold tabular-nums"
+            style={{ color: 'var(--ink-secondary)' }}
+          >
             {completedCount} of {checklist.length} completed
           </span>
           <button
             type="button"
             onClick={onCopyChecklist}
-            className="min-h-[48px] px-4 py-2 rounded-[6px] text-sm font-bold inline-flex items-center gap-1.5 cursor-pointer"
+            className="min-h-[44px] sm:min-h-[48px] px-4 py-2 rounded-[6px] text-sm font-bold inline-flex items-center gap-1.5 cursor-pointer"
             style={{
               backgroundColor: 'var(--accent-primary)',
               color: 'var(--accent-primary-ink)',
