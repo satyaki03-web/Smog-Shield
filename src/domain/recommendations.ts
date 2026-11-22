@@ -1,28 +1,53 @@
 import type {
   AirReading,
   AqiBand,
+  BandInfo,
   ChecklistItem,
   Recommendation,
   RecommendationBundle,
+  TimeOfDaySlot,
   UserProfile,
 } from '../types';
 import { findTwoHourWindows, getBandInfo, getVulnerabilityMultiplier } from './aqi';
 
-/** Builds deterministically prioritized Routine, Indoor Air, and Swaps recommendations. */
-export function buildRecommendations(
+interface RecommendationContext {
+  readonly profile: UserProfile;
+  readonly reading: AirReading;
+  readonly bandInfo: BandInfo;
+  readonly cleanStr: string;
+  readonly cleanSlot: TimeOfDaySlot;
+  readonly cleanestAvgAqi: number;
+  readonly worstStr: string;
+  readonly worstSlot: TimeOfDaySlot;
+  readonly highRisk: boolean;
+  readonly severeOrVeryPoor: boolean;
+  readonly poorOrWorse: boolean;
+}
+
+function createRecommendationContext(
   profile: UserProfile,
   reading: AirReading
-): RecommendationBundle {
+): RecommendationContext {
   const bandInfo = getBandInfo(reading.aqi);
   const { cleanest, worst } = findTwoHourWindows(reading.hourly);
-  const cleanStr = cleanest ? `${cleanest.startLabel} to ${cleanest.endLabel}` : '1:00 PM to 3:00 PM';
-  const cleanSlot = cleanest ? cleanest.timeOfDay : 'midday';
-  const worstStr = worst ? `${worst.startLabel} to ${worst.endLabel}` : '6:00 AM to 8:00 AM';
-  const worstSlot = worst ? worst.timeOfDay : 'morning';
-  const highRisk = getVulnerabilityMultiplier(profile) >= 1.25;
   const severeOrVeryPoor = bandInfo.band === 'veryPoor' || bandInfo.band === 'severe';
-  const poorOrWorse = severeOrVeryPoor || bandInfo.band === 'poor';
+  return {
+    profile,
+    reading,
+    bandInfo,
+    cleanStr: cleanest ? `${cleanest.startLabel} to ${cleanest.endLabel}` : '1:00 PM to 3:00 PM',
+    cleanSlot: cleanest ? cleanest.timeOfDay : 'midday',
+    cleanestAvgAqi: cleanest?.averageAqi ?? reading.aqi,
+    worstStr: worst ? `${worst.startLabel} to ${worst.endLabel}` : '6:00 AM to 8:00 AM',
+    worstSlot: worst ? worst.timeOfDay : 'morning',
+    highRisk: getVulnerabilityMultiplier(profile) >= 1.25,
+    severeOrVeryPoor,
+    poorOrWorse: severeOrVeryPoor || bandInfo.band === 'poor',
+  };
+}
 
+function buildRoutineRecommendations(ctx: RecommendationContext): Recommendation[] {
+  const { profile, bandInfo, cleanStr, cleanSlot, worstStr, worstSlot, highRisk, poorOrWorse } = ctx;
   const routine: Recommendation[] = [
     {
       id: 'routine-exercise',
@@ -85,7 +110,12 @@ export function buildRecommendations(
     });
   }
 
-  const indoor: Recommendation[] = [
+  return routine;
+}
+
+function buildIndoorRecommendations(ctx: RecommendationContext): Recommendation[] {
+  const { profile, cleanStr, cleanSlot, cleanestAvgAqi, worstStr, severeOrVeryPoor } = ctx;
+  return [
     {
       id: 'indoor-ventilate',
       category: 'indoor',
@@ -95,7 +125,7 @@ export function buildRecommendations(
         : `Cross-ventilate only during the ${cleanSlot} window`,
       action: severeOrVeryPoor
         ? `Keep doors and balcony gaps closed with rolled damp towels or weather-strip tape. Open windows for just 15 to 20 minutes during ${cleanStr} to clear indoor CO2.`
-        : `Open opposite windows for 30 minutes during ${cleanStr} (avg AQI ${cleanest?.averageAqi ?? reading.aqi}), then close before smog rises around ${worstStr}.`,
+        : `Open opposite windows for 30 minutes during ${cleanStr} (avg AQI ${cleanestAvgAqi}), then close before smog rises around ${worstStr}.`,
       timingOrCost: `Air out: ${cleanStr}`,
       exposureImpact: 'Reduces outdoor-to-indoor PM2.5 infiltration by 30% to 50% while preventing stale indoor CO2 buildup.',
       emissionsImpact: 'Zero energy use; avoids running exhaust fans continuously against heavy outdoor smog.',
@@ -143,82 +173,94 @@ export function buildRecommendations(
       basis: 'Controlled indoor cooking emissions trials and peer-reviewed reviews showing 100+ plants per sq m would be needed to match one HEPA unit.',
     },
   ];
+}
 
-  const swaps: Recommendation[] = [];
-
+function buildCommuteSwap(ctx: RecommendationContext): Recommendation {
+  const { profile, cleanStr, cleanSlot } = ctx;
   if (profile.commute === 'twoWheeler' || profile.commute === 'car') {
-    swaps.push({
+    const isTwoWheeler = profile.commute === 'twoWheeler';
+    return {
       id: 'swap-commute',
       category: 'swap',
       priority: 1,
-      title:
-        profile.commute === 'twoWheeler'
-          ? 'Swap 2+ two-wheeler days to metro, bus, or shared ride'
-          : 'Carpool or use metro for peak-hour office runs',
-      action:
-        profile.commute === 'twoWheeler'
-          ? 'Two-wheeler riders breathe direct tailpipe exhaust at handlebar height. Shift two or more commutes per week to metro/AC bus or a colleague carpool.'
-          : 'Share one car with 2 neighbours or combine park-and-ride with metro on Poor to Severe days. Turn off ignition at red lights over 30 seconds.',
+      title: isTwoWheeler
+        ? 'Swap 2+ two-wheeler days to metro, bus, or shared ride'
+        : 'Carpool or use metro for peak-hour office runs',
+      action: isTwoWheeler
+        ? 'Two-wheeler riders breathe direct tailpipe exhaust at handlebar height. Shift two or more commutes per week to metro/AC bus or a colleague carpool.'
+        : 'Share one car with 2 neighbours or combine park-and-ride with metro on Poor to Severe days. Turn off ignition at red lights over 30 seconds.',
       timingOrCost: 'Saves Rs 600 to 2,200 / month',
-      exposureImpact:
-        profile.commute === 'twoWheeler'
-          ? 'Cuts commute PM2.5 intake by 50% to 65% compared with open two-wheeler riding in traffic.'
-          : 'Using cabin recirculation with a clean cabin filter reduces in-car PM2.5 by 40% to 60%.',
+      exposureImpact: isTwoWheeler
+        ? 'Cuts commute PM2.5 intake by 50% to 65% compared with open two-wheeler riding in traffic.'
+        : 'Using cabin recirculation with a clean cabin filter reduces in-car PM2.5 by 40% to 60%.',
       emissionsImpact: 'Replaces 40 to 120 km/week of private tailpipe PM2.5, NOx, and CO2 emissions.',
       basis: 'Delhi NCR commuter exposure measurements comparing open two-wheelers, closed vehicles, and metro cabins.',
-    });
-  } else {
-    swaps.push({
-      id: 'swap-commute-keep',
-      category: 'swap',
-      priority: 1,
-      title: 'Protect your low-emission commute with quiet side streets',
-      action:
-        profile.commute === 'workFromHome'
-          ? `Keep remote workdays on Severe smog alerts and shift deliveries to the ${cleanSlot} window (${cleanStr}).`
-          : 'Walk or cycle along inner colony lanes rather than arterial roads, and wear a fitted N95 when AQI exceeds 150.',
-      timingOrCost: 'Zero cost | Route shift',
-      exposureImpact: 'Stepping just 100 meters off a main arterial road drops black-carbon and ultrafine exposure by 30% to 50%.',
-      emissionsImpact: 'Maintains near-zero personal transport emissions.',
-      basis: 'Near-roadway dispersion studies showing sharp pollutant decay 50 to 150 meters from heavy traffic lanes.',
-    });
+    };
   }
 
-  swaps.push({
-    id: 'swap-cooking',
+  return {
+    id: 'swap-commute-keep',
     category: 'swap',
-    priority: 2,
-    title:
-      profile.cookingFuel === 'biomassOrWood'
+    priority: 1,
+    title: 'Protect your low-emission commute with quiet side streets',
+    action:
+      profile.commute === 'workFromHome'
+        ? `Keep remote workdays on Severe smog alerts and shift deliveries to the ${cleanSlot} window (${cleanStr}).`
+        : 'Walk or cycle along inner colony lanes rather than arterial roads, and wear a fitted N95 when AQI exceeds 150.',
+    timingOrCost: 'Zero cost | Route shift',
+    exposureImpact: 'Stepping just 100 meters off a main arterial road drops black-carbon and ultrafine exposure by 30% to 50%.',
+    emissionsImpact: 'Maintains near-zero personal transport emissions.',
+    basis: 'Near-roadway dispersion studies showing sharp pollutant decay 50 to 150 meters from heavy traffic lanes.',
+  };
+}
+
+function buildSwapRecommendations(ctx: RecommendationContext): Recommendation[] {
+  const isBiomass = ctx.profile.cookingFuel === 'biomassOrWood';
+  return [
+    buildCommuteSwap(ctx),
+    {
+      id: 'swap-cooking',
+      category: 'swap',
+      priority: 2,
+      title: isBiomass
         ? 'Transition from wood or coal chulha to LPG or induction'
         : 'Use electric kettle and induction for boiling and reheating',
-    action:
-      profile.cookingFuel === 'biomassOrWood'
+      action: isBiomass
         ? 'Prioritize LPG (check Ujjwala refill subsidies) or a single 1800W induction cooktop for daily tea and dal to remove dense indoor woodsmoke.'
         : 'Boiling tea, milk, and water on an electric kettle or induction hob avoids indoor NO2 and heat buildup in closed winter kitchens.',
-    timingOrCost: profile.cookingFuel === 'biomassOrWood' ? 'High health priority' : 'Rs 1,400 to 2,500 one-time',
-    exposureImpact:
-      profile.cookingFuel === 'biomassOrWood'
+      timingOrCost: isBiomass ? 'High health priority' : 'Rs 1,400 to 2,500 one-time',
+      exposureImpact: isBiomass
         ? 'Cuts indoor kitchen PM2.5 by 75% to 90% immediately.'
         : 'Reduces indoor NO2 and combustion moisture by 30% to 50% during closed-window days.',
-    emissionsImpact: 'Lowers household combustion emissions and trims LPG cylinder refills.',
-    basis: 'WHO indoor air quality guidelines comparing biomass, LPG, and electric cooking appliances.',
-  });
+      emissionsImpact: 'Lowers household combustion emissions and trims LPG cylinder refills.',
+      basis: 'WHO indoor air quality guidelines comparing biomass, LPG, and electric cooking appliances.',
+    },
+    {
+      id: 'swap-waste-heating',
+      category: 'swap',
+      priority: 3,
+      title: 'Prevent winter leaf burning and open security bonfires',
+      action:
+        'Ask your RWA or street committee to compost dry leaves in a corner pit and provide warm jackets or safe oil-filled electric heaters for night guards instead of wood or coal fires.',
+      timingOrCost: 'Community action | Low shared cost',
+      exposureImpact: 'Eliminates local nighttime smoke plumes that leak straight into ground and lower-floor bedrooms.',
+      emissionsImpact: 'Open biomass burning is a major hyper-local PM2.5 and black-carbon source in winter evenings.',
+      basis: 'Urban winter source-apportionment studies across Delhi NCR and Indo-Gangetic cities.',
+    },
+  ];
+}
 
-  swaps.push({
-    id: 'swap-waste-heating',
-    category: 'swap',
-    priority: 3,
-    title: 'Prevent winter leaf burning and open security bonfires',
-    action:
-      'Ask your RWA or street committee to compost dry leaves in a corner pit and provide warm jackets or safe oil-filled electric heaters for night guards instead of wood or coal fires.',
-    timingOrCost: 'Community action | Low shared cost',
-    exposureImpact: 'Eliminates local nighttime smoke plumes that leak straight into ground and lower-floor bedrooms.',
-    emissionsImpact: 'Open biomass burning is a major hyper-local PM2.5 and black-carbon source in winter evenings.',
-    basis: 'Urban winter source-apportionment studies across Delhi NCR and Indo-Gangetic cities.',
-  });
-
-  return { routine, indoor, swaps };
+/** Builds deterministically prioritized Routine, Indoor Air, and Swaps recommendations. */
+export function buildRecommendations(
+  profile: UserProfile,
+  reading: AirReading
+): RecommendationBundle {
+  const ctx = createRecommendationContext(profile, reading);
+  return {
+    routine: buildRoutineRecommendations(ctx),
+    indoor: buildIndoorRecommendations(ctx),
+    swaps: buildSwapRecommendations(ctx),
+  };
 }
 
 /** Returns the community, school, and household checklist tailored to the active AQI band. */
@@ -287,10 +329,14 @@ export function buildPlanSummary(
   return `${reading.city.name} air quality is ${band.label} at AQI ${reading.aqi} (PM2.5 ${reading.pm25} ug/m3, PM10 ${reading.pm10} ug/m3). ${band.summary} Cleanest 2-hour window: ${cleanStr}. Peak smog window to avoid: ${worstStr}.`;
 }
 
+function matchesAnyKeyword(text: string, keywords: readonly string[]): boolean {
+  return keywords.some((keyword) => text.includes(keyword));
+}
+
 /** Produces an instant deterministic rule-engine answer for the Ask tab while Gemini runs or offline. */
 export function answerNeighbourQuestion(
   question: string,
-  profile: UserProfile,
+  _profile: UserProfile,
   reading: AirReading
 ): string {
   const q = question.toLowerCase();
@@ -299,26 +345,26 @@ export function answerNeighbourQuestion(
   const cleanStr = cleanest ? `${cleanest.startLabel} to ${cleanest.endLabel}` : '1:00 PM to 3:00 PM';
   const worstStr = worst ? `${worst.startLabel} to ${worst.endLabel}` : '6:00 AM to 8:00 AM';
 
-  if (q.includes('mask') || q.includes('n95') || q.includes('cloth')) {
+  if (matchesAnyKeyword(q, ['mask', 'n95', 'cloth'])) {
     return `At AQI ${reading.aqi} (${band.label}) in ${reading.city.name}: ${band.maskGuidance} Cloth and surgical masks leave side gaps that let fine PM2.5 particles straight through. A well-sealed N95 or FFP2 cuts inhaled fine particles by 80% to 95%, and can be air-dried and reused for roughly 30 to 40 hours.`;
   }
-  if (q.includes('window') || q.includes('ventilat') || q.includes('air out') || q.includes('open')) {
+  if (matchesAnyKeyword(q, ['window', 'ventilat', 'air out', 'open'])) {
     return `The cleanest 2-hour window in ${reading.city.name} over the next 24 hours is ${cleanStr} (average AQI around ${cleanest?.averageAqi ?? reading.aqi}). Open opposite windows for 15 to 25 minutes during that window to flush indoor CO2, then close up before smog thickens around ${worstStr}.`;
   }
-  if (q.includes('plant') || q.includes('steam') || q.includes('jaggery') || q.includes('myth')) {
+  if (matchesAnyKeyword(q, ['plant', 'steam', 'jaggery', 'myth'])) {
     return `Indoor plants and warm drinks feel soothing, and staying hydrated helps clear throat mucus, but neither removes PM2.5 from room air. Real exposure drops come from closing window gaps outside ${cleanStr}, damp mopping instead of dry sweeping, kitchen exhaust during cooking, and a true HEPA filter in the sleeping room.`;
   }
-  if (q.includes('school') || q.includes('child') || q.includes('play') || q.includes('park') || q.includes('walk') || q.includes('run')) {
+  if (matchesAnyKeyword(q, ['school', 'child', 'play', 'park', 'walk', 'run'])) {
     const indoorAdvice =
       reading.aqi > 200
         ? `At AQI ${reading.aqi} (${band.label}), keep children's active play and brisk walks indoors today.`
         : `At AQI ${reading.aqi} (${band.label}), light outdoor play is workable during ${cleanStr}, away from main roads.`;
     return `${indoorAdvice} Avoid ${worstStr} when cold ground inversions trap exhaust near breathing height. If commuting to school, use a snug child-sized N95 or KF94 mask and ask the school gate to stop bus idling.`;
   }
-  if (q.includes('purifier') || q.includes('diy') || q.includes('budget') || q.includes('cheap') || q.includes('cost')) {
+  if (matchesAnyKeyword(q, ['purifier', 'diy', 'budget', 'cheap', 'cost'])) {
     return `You do not need an expensive smart purifier for every room. Pick one small bedroom for sleep, seal door gaps with a rolled towel, and run a basic true HEPA H13 unit (no ionizer needed) or a box fan sealed to a MERV-13/HEPA filter. Vacuum the outer mesh pre-filter weekly so the main filter lasts longer.`;
   }
-  if (q.includes('rwa') || q.includes('burn') || q.includes('guard') || q.includes('communit')) {
+  if (matchesAnyKeyword(q, ['rwa', 'burn', 'guard', 'communit'])) {
     return `Three fast wins for an RWA in ${reading.city.name}: (1) compost dry leaves instead of burning heaps, (2) give night guards woollen jackets or safe electric heaters to stop wood bonfires, and (3) lightly sprinkle greywater before morning road sweeping. Together these cut evening ground-level smoke noticeably.`;
   }
   return `Based on ${reading.city.name} at AQI ${reading.aqi} (${band.label}, PM2.5 ${reading.pm25} ug/m3): keep heavy outdoor exertion indoors during ${worstStr}, air out briefly during ${cleanStr}, and wear a snug N95 outdoors. Ask about masks, windows, school play, budget purifiers, or RWA steps for specific advice.`;

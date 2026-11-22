@@ -12,6 +12,23 @@ interface CacheEntry {
   expiresAt: number;
 }
 
+interface OpenMeteoPayload {
+  current?: { us_aqi?: unknown; pm2_5?: unknown; pm10?: unknown };
+  hourly?: { time?: unknown; us_aqi?: unknown; pm2_5?: unknown; pm10?: unknown };
+}
+
+/** Optional configuration overrides for Open-Meteo air quality fetches. */
+export interface FetchAirQualityOptions {
+  /** Bypasses memory and session caches when true. */
+  forceRefresh?: boolean;
+  /** External AbortSignal used to cancel an in-flight request. */
+  signal?: AbortSignal;
+  /** Custom fetch implementation for unit or integration tests. */
+  fetchImpl?: typeof fetch;
+  /** Request timeout in milliseconds before falling back offline. */
+  timeoutMs?: number;
+}
+
 const memoryCache = new Map<string, CacheEntry>();
 const inflightRequests = new Map<string, Promise<AirReading>>();
 
@@ -38,6 +55,106 @@ function writeSessionCache(cityId: string, entry: CacheEntry): void {
     window.sessionStorage.setItem(`${STORAGE_KEYS.airCachePrefix}${cityId}`, JSON.stringify(entry));
   } catch {
     // Ignore storage quota or sandbox restrictions
+  }
+}
+
+function readCachedReading(cityId: string): AirReading | null {
+  const mem = memoryCache.get(cityId);
+  if (mem && Date.now() < mem.expiresAt) {
+    return mem.reading;
+  }
+  const sess = readSessionCache(cityId);
+  if (sess) {
+    memoryCache.set(cityId, sess);
+    return sess.reading;
+  }
+  return null;
+}
+
+function clampMetric(rawValue: unknown, fallback: number, maxBound?: number): number {
+  const parsed = Number(rawValue ?? fallback);
+  if (!Number.isFinite(parsed)) return fallback;
+  const rounded = Math.max(0, Math.round(parsed));
+  return maxBound !== undefined ? Math.min(maxBound, rounded) : rounded;
+}
+
+function parseOpenMeteoHourly(
+  hourlyPayload: OpenMeteoPayload['hourly'],
+  currentAqi: number,
+  currentPm25: number,
+  currentPm10: number
+): HourlyPoint[] {
+  const times = Array.isArray(hourlyPayload?.time) ? (hourlyPayload.time as string[]) : [];
+  const aqis = Array.isArray(hourlyPayload?.us_aqi) ? (hourlyPayload.us_aqi as unknown[]) : [];
+  const pm25s = Array.isArray(hourlyPayload?.pm2_5) ? (hourlyPayload.pm2_5 as unknown[]) : [];
+  const pm10s = Array.isArray(hourlyPayload?.pm10) ? (hourlyPayload.pm10 as unknown[]) : [];
+
+  const nowMs = Date.now() - 3600 * 1000;
+  const hourly: HourlyPoint[] = [];
+
+  for (let i = 0; i < times.length && hourly.length < 24; i++) {
+    const dt = new Date(times[i]);
+    if (Number.isNaN(dt.getTime()) || dt.getTime() < nowMs) continue;
+    hourly.push({
+      timeIso: dt.toISOString(),
+      hourLabel: formatHourLabel(dt),
+      hour24: dt.getHours(),
+      aqi: clampMetric(aqis[i], currentAqi, MAX_AQI),
+      pm25: clampMetric(pm25s[i], currentPm25),
+      pm10: clampMetric(pm10s[i], currentPm10),
+    });
+  }
+
+  return hourly.length >= 6 ? hourly : buildFallbackHourly(currentAqi, currentPm25, currentPm10);
+}
+
+function parseOpenMeteoReading(city: CityInfo, data: OpenMeteoPayload): AirReading {
+  const currentAqi = clampMetric(data.current?.us_aqi, city.fallbackAqi, MAX_AQI);
+  const currentPm25 = clampMetric(data.current?.pm2_5, city.fallbackPm25);
+  const currentPm10 = clampMetric(data.current?.pm10, city.fallbackPm10);
+
+  return {
+    city,
+    aqi: currentAqi,
+    pm25: currentPm25,
+    pm10: currentPm10,
+    fetchedAtIso: new Date().toISOString(),
+    source: 'live',
+    hourly: parseOpenMeteoHourly(data.hourly, currentAqi, currentPm25, currentPm10),
+  };
+}
+
+async function fetchLiveReading(
+  city: CityInfo,
+  options?: FetchAirQualityOptions
+): Promise<AirReading> {
+  const fetchImpl = options?.fetchImpl ?? fetch;
+  const timeoutMs = options?.timeoutMs ?? OPEN_METEO_TIMEOUT_MS;
+  const controller = new AbortController();
+  const externalSignal = options?.signal;
+  const onExternalAbort = (): void => controller.abort();
+  externalSignal?.addEventListener('abort', onExternalAbort, { once: true });
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const url =
+      'https://air-quality-api.open-meteo.com/v1/air-quality' +
+      `?latitude=${city.lat}&longitude=${city.lon}` +
+      '&current=us_aqi,pm2_5,pm10&hourly=us_aqi,pm2_5,pm10&forecast_days=2&timezone=auto';
+    const res = await fetchImpl(url, { signal: controller.signal });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+    const data = (await res.json()) as OpenMeteoPayload;
+    const reading = parseOpenMeteoReading(city, data);
+    const entry: CacheEntry = { reading, expiresAt: Date.now() + AIR_CACHE_TTL_MS };
+    memoryCache.set(city.id, entry);
+    writeSessionCache(city.id, entry);
+    return reading;
+  } catch {
+    return buildOfflineReading(city, null);
+  } finally {
+    clearTimeout(timeout);
+    externalSignal?.removeEventListener('abort', onExternalAbort);
   }
 }
 
@@ -88,13 +205,6 @@ export function buildOfflineReading(city: CityInfo, manualAqi: number | null = n
   };
 }
 
-export interface FetchAirQualityOptions {
-  forceRefresh?: boolean;
-  signal?: AbortSignal;
-  fetchImpl?: typeof fetch;
-  timeoutMs?: number;
-}
-
 /**
  * Fetches live Open-Meteo hourly AQI/PM2.5/PM10 with 10-minute memory/session caching,
  * in-flight request deduplication, AbortSignal cancellation, and offline fallback.
@@ -110,15 +220,8 @@ export async function fetchAirQuality(
 
   const forceRefresh = options?.forceRefresh ?? false;
   if (!forceRefresh) {
-    const mem = memoryCache.get(city.id);
-    if (mem && Date.now() < mem.expiresAt) {
-      return mem.reading;
-    }
-    const sess = readSessionCache(city.id);
-    if (sess) {
-      memoryCache.set(city.id, sess);
-      return sess.reading;
-    }
+    const cached = readCachedReading(city.id);
+    if (cached) return cached;
   }
 
   const existing = !forceRefresh && !options?.signal ? inflightRequests.get(city.id) : undefined;
@@ -126,87 +229,13 @@ export async function fetchAirQuality(
     return existing;
   }
 
-  const runFetch = async (): Promise<AirReading> => {
-    const fetchImpl = options?.fetchImpl ?? fetch;
-    const timeoutMs = options?.timeoutMs ?? OPEN_METEO_TIMEOUT_MS;
-    const controller = new AbortController();
-    const externalSignal = options?.signal;
-    const onExternalAbort = () => controller.abort();
-    externalSignal?.addEventListener('abort', onExternalAbort, { once: true });
-    const timeout = setTimeout(() => controller.abort(), timeoutMs);
-
-    try {
-      const url =
-        'https://air-quality-api.open-meteo.com/v1/air-quality' +
-        `?latitude=${city.lat}&longitude=${city.lon}` +
-        '&current=us_aqi,pm2_5,pm10&hourly=us_aqi,pm2_5,pm10&forecast_days=2&timezone=auto';
-      const res = await fetchImpl(url, { signal: controller.signal });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-      const data = (await res.json()) as {
-        current?: { us_aqi?: unknown; pm2_5?: unknown; pm10?: unknown };
-        hourly?: { time?: unknown; us_aqi?: unknown; pm2_5?: unknown; pm10?: unknown };
-      };
-
-      const rawAqi = Number(data?.current?.us_aqi ?? city.fallbackAqi);
-      const rawPm25 = Number(data?.current?.pm2_5 ?? city.fallbackPm25);
-      const rawPm10 = Number(data?.current?.pm10 ?? city.fallbackPm10);
-      const currentAqi = Number.isFinite(rawAqi) ? Math.min(MAX_AQI, Math.max(0, Math.round(rawAqi))) : city.fallbackAqi;
-      const currentPm25 = Number.isFinite(rawPm25) ? Math.max(0, Math.round(rawPm25)) : city.fallbackPm25;
-      const currentPm10 = Number.isFinite(rawPm10) ? Math.max(0, Math.round(rawPm10)) : city.fallbackPm10;
-
-      const times: string[] = Array.isArray(data?.hourly?.time) ? (data.hourly.time as string[]) : [];
-      const aqis: number[] = Array.isArray(data?.hourly?.us_aqi) ? (data.hourly.us_aqi as number[]) : [];
-      const pm25s: number[] = Array.isArray(data?.hourly?.pm2_5) ? (data.hourly.pm2_5 as number[]) : [];
-      const pm10s: number[] = Array.isArray(data?.hourly?.pm10) ? (data.hourly.pm10 as number[]) : [];
-
-      const nowMs = Date.now() - 3600 * 1000;
-      const hourly: HourlyPoint[] = [];
-      for (let i = 0; i < times.length && hourly.length < 24; i++) {
-        const dt = new Date(times[i]);
-        if (Number.isNaN(dt.getTime()) || dt.getTime() < nowMs) continue;
-        const hAqi = Number(aqis[i] ?? currentAqi);
-        const hPm25 = Number(pm25s[i] ?? currentPm25);
-        const hPm10 = Number(pm10s[i] ?? currentPm10);
-        hourly.push({
-          timeIso: dt.toISOString(),
-          hourLabel: formatHourLabel(dt),
-          hour24: dt.getHours(),
-          aqi: Number.isFinite(hAqi) ? Math.min(MAX_AQI, Math.max(0, Math.round(hAqi))) : currentAqi,
-          pm25: Number.isFinite(hPm25) ? Math.max(0, Math.round(hPm25)) : currentPm25,
-          pm10: Number.isFinite(hPm10) ? Math.max(0, Math.round(hPm10)) : currentPm10,
-        });
-      }
-
-      const reading: AirReading = {
-        city,
-        aqi: currentAqi,
-        pm25: currentPm25,
-        pm10: currentPm10,
-        fetchedAtIso: new Date().toISOString(),
-        source: 'live',
-        hourly: hourly.length >= 6 ? hourly : buildFallbackHourly(currentAqi, currentPm25, currentPm10),
-      };
-
-      const entry: CacheEntry = { reading, expiresAt: Date.now() + AIR_CACHE_TTL_MS };
-      memoryCache.set(city.id, entry);
-      writeSessionCache(city.id, entry);
-      return reading;
-    } catch {
-      return buildOfflineReading(city, null);
-    } finally {
-      clearTimeout(timeout);
-      externalSignal?.removeEventListener('abort', onExternalAbort);
-    }
-  };
-
   if (!options?.signal) {
-    const pending = runFetch().finally(() => {
+    const pending = fetchLiveReading(city, options).finally(() => {
       inflightRequests.delete(city.id);
     });
     inflightRequests.set(city.id, pending);
     return pending;
   }
 
-  return runFetch();
+  return fetchLiveReading(city, options);
 }

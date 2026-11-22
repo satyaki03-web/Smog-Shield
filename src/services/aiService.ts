@@ -2,13 +2,75 @@ import { ASK_TIMEOUT_MS } from '../constants';
 import { AskCache } from '../domain/ask';
 import type { AskRunResult, CompactAskPayload, PersonaliseRunResult } from '../types';
 
+const DEFAULT_MODEL_NAME = 'gemini-3.5-flash-lite';
+
+/** Parameters for executing a cached, timeout-bounded Ask Q&A request. */
 export interface RunAskOptions {
+  /** Compact validated payload containing question, live AQI, profile summary, and recent turns. */
   payload: CompactAskPayload;
+  /** Client-side TTL cache instance for identical Ask queries. */
   cache: AskCache;
+  /** External AbortSignal used when the user cancels a pending question. */
   signal: AbortSignal;
+  /** Overall client timeout in milliseconds before keeping Quick Guidance. */
   timeoutMs?: number;
+  /** Optional custom fetch implementation for tests. */
   fetchImpl?: typeof fetch;
+  /** Endpoint path override (defaults to `/api/gemini/ask`). */
   endpointUrl?: string;
+}
+
+/** Parameters for executing a timeout-bounded Today briefing personalisation request. */
+export interface RunPersonaliseOptions {
+  /** Verified air quality and household JSON context sent to the server proxy. */
+  context: Record<string, unknown>;
+  /** Optional AbortSignal for request cancellation. */
+  signal?: AbortSignal;
+  /** Overall client timeout in milliseconds. */
+  timeoutMs?: number;
+  /** Optional custom fetch implementation for tests. */
+  fetchImpl?: typeof fetch;
+  /** Endpoint path override (defaults to `/api/gemini/personalise`). */
+  endpointUrl?: string;
+}
+
+interface TimedSignalHandle {
+  readonly signal: AbortSignal;
+  readonly didTimeout: () => boolean;
+  readonly cleanup: () => void;
+}
+
+function createTimedSignal(timeoutMs: number, externalSignal?: AbortSignal): TimedSignalHandle {
+  const controller = new AbortController();
+  let timedOut = false;
+  const onExternalAbort = (): void => controller.abort();
+  externalSignal?.addEventListener('abort', onExternalAbort, { once: true });
+  const timerId = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+
+  return {
+    signal: controller.signal,
+    didTimeout: () => timedOut,
+    cleanup: () => {
+      clearTimeout(timerId);
+      externalSignal?.removeEventListener('abort', onExternalAbort);
+    },
+  };
+}
+
+function normalizeModelName(rawModel: unknown): string {
+  return typeof rawModel === 'string' && rawModel.trim() ? rawModel.trim() : DEFAULT_MODEL_NAME;
+}
+
+async function readServerErrorMessage(res: Response): Promise<string> {
+  try {
+    const errData = (await res.json()) as { error?: unknown };
+    return typeof errData?.error === 'string' ? errData.error.trim() : '';
+  } catch {
+    return '';
+  }
 }
 
 /**
@@ -28,39 +90,22 @@ export async function runAskRequest({
   if (cached) {
     return { status: 'cached', text: cached.text, model: cached.model };
   }
-
   if (signal.aborted) {
     return { status: 'cancelled', notice: 'Request cancelled. Showing quick guidance.' };
   }
 
-  const requestController = new AbortController();
-  let timedOut = false;
-
-  const onExternalAbort = () => requestController.abort();
-  signal.addEventListener('abort', onExternalAbort, { once: true });
-  const timerId = setTimeout(() => {
-    timedOut = true;
-    requestController.abort();
-  }, timeoutMs);
+  const timed = createTimedSignal(timeoutMs, signal);
 
   try {
     const res = await fetchImpl(endpointUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
-      signal: requestController.signal,
+      signal: timed.signal,
     });
 
     if (!res.ok) {
-      let serverMsg = '';
-      try {
-        const errData = (await res.json()) as { error?: unknown };
-        if (typeof errData?.error === 'string' && errData.error.trim()) {
-          serverMsg = errData.error.trim();
-        }
-      } catch {
-        // Ignore non-JSON error body
-      }
+      const serverMsg = await readServerErrorMessage(res);
       return {
         status: 'fallback',
         notice: serverMsg
@@ -71,10 +116,6 @@ export async function runAskRequest({
 
     const data = (await res.json()) as { text?: unknown; model?: unknown };
     const text = typeof data?.text === 'string' ? data.text.trim() : '';
-    const model =
-      typeof data?.model === 'string' && data.model.trim()
-        ? data.model.trim()
-        : 'gemini-3.5-flash-lite';
     if (!text) {
       return {
         status: 'fallback',
@@ -82,13 +123,14 @@ export async function runAskRequest({
       };
     }
 
+    const model = normalizeModelName(data?.model);
     cache.set(cacheKey, { text, model });
     return { status: 'ok', text, model };
   } catch {
     if (signal.aborted) {
       return { status: 'cancelled', notice: 'Request cancelled. Showing quick guidance.' };
     }
-    if (timedOut) {
+    if (timed.didTimeout()) {
       return {
         status: 'timeout',
         notice: 'Personalised answer timed out after 15s. Showing quick guidance.',
@@ -99,17 +141,8 @@ export async function runAskRequest({
       notice: 'Unable to reach Gemini right now. Showing quick guidance.',
     };
   } finally {
-    clearTimeout(timerId);
-    signal.removeEventListener('abort', onExternalAbort);
+    timed.cleanup();
   }
-}
-
-export interface RunPersonaliseOptions {
-  context: Record<string, unknown>;
-  signal?: AbortSignal;
-  timeoutMs?: number;
-  fetchImpl?: typeof fetch;
-  endpointUrl?: string;
 }
 
 /**
@@ -123,17 +156,14 @@ export async function runPersonaliseRequest({
   fetchImpl = fetch,
   endpointUrl = '/api/gemini/personalise',
 }: RunPersonaliseOptions): Promise<PersonaliseRunResult> {
-  const controller = new AbortController();
-  const onExternalAbort = () => controller.abort();
-  signal?.addEventListener('abort', onExternalAbort, { once: true });
-  const timerId = setTimeout(() => controller.abort(), timeoutMs);
+  const timed = createTimedSignal(timeoutMs, signal);
 
   try {
     const res = await fetchImpl(endpointUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ context }),
-      signal: controller.signal,
+      signal: timed.signal,
     });
     const data = (await res.json()) as { text?: unknown; model?: unknown; error?: unknown };
     if (!res.ok) {
@@ -143,6 +173,7 @@ export async function runPersonaliseRequest({
           : 'Gemini briefing unavailable right now. Showing verified rule-engine summary.';
       return { status: 'error', error: msg };
     }
+
     const text = typeof data?.text === 'string' ? data.text.trim() : '';
     if (!text) {
       return {
@@ -150,18 +181,14 @@ export async function runPersonaliseRequest({
         error: 'Gemini returned an empty briefing. Showing verified rule-engine summary.',
       };
     }
-    const model =
-      typeof data?.model === 'string' && data.model.trim()
-        ? data.model.trim()
-        : 'gemini-3.5-flash-lite';
-    return { status: 'ok', text, model };
+
+    return { status: 'ok', text, model: normalizeModelName(data?.model) };
   } catch {
     return {
       status: 'error',
       error: 'Unable to reach Gemini right now. Showing verified rule-engine summary.',
     };
   } finally {
-    clearTimeout(timerId);
-    signal?.removeEventListener('abort', onExternalAbort);
+    timed.cleanup();
   }
 }

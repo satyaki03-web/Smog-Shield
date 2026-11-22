@@ -4,10 +4,101 @@ import type {
   BandInfo,
   CityInfo,
   HourlyPoint,
+  Sensitivity,
   TimeOfDaySlot,
   TimeWindow,
   UserProfile,
 } from '../types';
+
+interface AqiBandThreshold {
+  readonly maxAqi: number;
+  readonly info: BandInfo;
+}
+
+const AQI_BAND_THRESHOLDS: readonly AqiBandThreshold[] = [
+  {
+    maxAqi: 50,
+    info: {
+      band: 'good',
+      label: 'Good',
+      rangeLabel: '0 to 50',
+      summary: 'Air is clean for outdoor routines, school play, and full cross-ventilation.',
+      maskGuidance: 'No mask needed for ambient air.',
+      cssVar: 'var(--band-good)',
+      shape: 'circle',
+    },
+  },
+  {
+    maxAqi: 100,
+    info: {
+      band: 'satisfactory',
+      label: 'Satisfactory',
+      rangeLabel: '51 to 100',
+      summary: 'Acceptable for most people; keep quick-relief inhalers handy for sensitive lungs.',
+      maskGuidance: 'Optional near busy traffic junctions.',
+      cssVar: 'var(--band-satisfactory)',
+      shape: 'roundedSquare',
+    },
+  },
+  {
+    maxAqi: 200,
+    info: {
+      band: 'moderate',
+      label: 'Moderate',
+      rangeLabel: '101 to 200',
+      summary: 'Fine particles begin irritating airways during brisk exercise and peak traffic hours.',
+      maskGuidance: 'Well-fitted N95 recommended for two-wheeler rides and sensitive members.',
+      cssVar: 'var(--band-moderate)',
+      shape: 'diamond',
+    },
+  },
+  {
+    maxAqi: 300,
+    info: {
+      band: 'poor',
+      label: 'Poor',
+      rangeLabel: '201 to 300',
+      summary: 'Prolonged outdoor exposure causes breathing discomfort for most residents.',
+      maskGuidance: 'Well-fitted N95 or FFP2 mask for all outdoor errands and commutes.',
+      cssVar: 'var(--band-poor)',
+      shape: 'triangle',
+    },
+  },
+  {
+    maxAqi: 400,
+    info: {
+      band: 'veryPoor',
+      label: 'Very Poor',
+      rangeLabel: '301 to 400',
+      summary: 'High winter smog burden. Move exercise indoors and shorten outdoor trips.',
+      maskGuidance: 'Snug N95 or FFP2 mask required outdoors; check nose-bridge seal.',
+      cssVar: 'var(--band-very-poor)',
+      shape: 'octagon',
+    },
+  },
+  {
+    maxAqi: Number.POSITIVE_INFINITY,
+    info: {
+      band: 'severe',
+      label: 'Severe',
+      rangeLabel: '401 and above',
+      summary: 'Health alert for everyone. Keep windows sealed outside brief low-smog airing and avoid outdoor exertion.',
+      maskGuidance: 'Strict N95 or FFP2 mask for unavoidable travel; avoid outdoor play for children.',
+      cssVar: 'var(--band-severe)',
+      shape: 'alertHex',
+    },
+  },
+];
+
+const SENSITIVITY_RISK_LABELS: ReadonlyArray<{
+  readonly key: Sensitivity;
+  readonly label: string;
+}> = [
+  { key: 'asthma', label: 'Asthma management (keep rescue inhaler accessible)' },
+  { key: 'copd', label: 'COPD sensitivity (avoid cold morning smog peaks)' },
+  { key: 'heart', label: 'Heart condition (skip heavy outdoor exertion)' },
+  { key: 'pregnancy', label: 'Pregnancy (prioritize clean bedroom air overnight)' },
+];
 
 /** Resolves a curated city by its identifier, falling back to Delhi. */
 export function getCityById(id: string): CityInfo {
@@ -17,70 +108,8 @@ export function getCityById(id: string): CityInfo {
 /** Classifies a numeric AQI reading (0 to 500) into its Indian CPCB severity band. */
 export function getBandInfo(aqi: number): BandInfo {
   const value = Math.max(0, Math.round(aqi));
-  if (value <= 50) {
-    return {
-      band: 'good',
-      label: 'Good',
-      rangeLabel: '0 to 50',
-      summary: 'Air is clean for outdoor routines, school play, and full cross-ventilation.',
-      maskGuidance: 'No mask needed for ambient air.',
-      cssVar: 'var(--band-good)',
-      shape: 'circle',
-    };
-  }
-  if (value <= 100) {
-    return {
-      band: 'satisfactory',
-      label: 'Satisfactory',
-      rangeLabel: '51 to 100',
-      summary: 'Acceptable for most people; keep quick-relief inhalers handy for sensitive lungs.',
-      maskGuidance: 'Optional near busy traffic junctions.',
-      cssVar: 'var(--band-satisfactory)',
-      shape: 'roundedSquare',
-    };
-  }
-  if (value <= 200) {
-    return {
-      band: 'moderate',
-      label: 'Moderate',
-      rangeLabel: '101 to 200',
-      summary: 'Fine particles begin irritating airways during brisk exercise and peak traffic hours.',
-      maskGuidance: 'Well-fitted N95 recommended for two-wheeler rides and sensitive members.',
-      cssVar: 'var(--band-moderate)',
-      shape: 'diamond',
-    };
-  }
-  if (value <= 300) {
-    return {
-      band: 'poor',
-      label: 'Poor',
-      rangeLabel: '201 to 300',
-      summary: 'Prolonged outdoor exposure causes breathing discomfort for most residents.',
-      maskGuidance: 'Well-fitted N95 or FFP2 mask for all outdoor errands and commutes.',
-      cssVar: 'var(--band-poor)',
-      shape: 'triangle',
-    };
-  }
-  if (value <= 400) {
-    return {
-      band: 'veryPoor',
-      label: 'Very Poor',
-      rangeLabel: '301 to 400',
-      summary: 'High winter smog burden. Move exercise indoors and shorten outdoor trips.',
-      maskGuidance: 'Snug N95 or FFP2 mask required outdoors; check nose-bridge seal.',
-      cssVar: 'var(--band-very-poor)',
-      shape: 'octagon',
-    };
-  }
-  return {
-    band: 'severe',
-    label: 'Severe',
-    rangeLabel: '401 and above',
-    summary: 'Health alert for everyone. Keep windows sealed outside brief low-smog airing and avoid outdoor exertion.',
-    maskGuidance: 'Strict N95 or FFP2 mask for unavoidable travel; avoid outdoor play for children.',
-    cssVar: 'var(--band-severe)',
-    shape: 'alertHex',
-  };
+  const match = AQI_BAND_THRESHOLDS.find((entry) => value <= entry.maxAqi);
+  return (match ?? AQI_BAND_THRESHOLDS[AQI_BAND_THRESHOLDS.length - 1]).info;
 }
 
 /** Computes a bounded household sensitivity multiplier (1.00x to 2.00x). */
@@ -107,16 +136,17 @@ export function getAtRiskSummary(profile: UserProfile, band: AqiBand): string[] 
       `${profile.elders} ${profile.elders === 1 ? 'elder' : 'elders'} (higher cardiovascular sensitivity to PM2.5)`
     );
   }
-  if (profile.sensitivities.includes('asthma')) groups.push('Asthma management (keep rescue inhaler accessible)');
-  if (profile.sensitivities.includes('copd')) groups.push('COPD sensitivity (avoid cold morning smog peaks)');
-  if (profile.sensitivities.includes('heart')) groups.push('Heart condition (skip heavy outdoor exertion)');
-  if (profile.sensitivities.includes('pregnancy')) groups.push('Pregnancy (prioritize clean bedroom air overnight)');
-  if (groups.length === 0) {
-    if (band === 'veryPoor' || band === 'severe') {
-      groups.push('All healthy adults are affected at this smog level');
-    } else {
-      groups.push('General household (standard precautions apply)');
+  for (const item of SENSITIVITY_RISK_LABELS) {
+    if (profile.sensitivities.includes(item.key)) {
+      groups.push(item.label);
     }
+  }
+  if (groups.length === 0) {
+    groups.push(
+      band === 'veryPoor' || band === 'severe'
+        ? 'All healthy adults are affected at this smog level'
+        : 'General household (standard precautions apply)'
+    );
   }
   return groups;
 }
@@ -165,6 +195,13 @@ export function buildFallbackHourly(
   return points;
 }
 
+function buildEndHourLabel(hourly: readonly HourlyPoint[], startIndex: number): string {
+  const nextPoint = hourly[startIndex + 1];
+  const endDate = new Date(nextPoint.timeIso);
+  endDate.setHours(endDate.getHours() + 1);
+  return Number.isNaN(endDate.getTime()) ? nextPoint.hourLabel : formatHourLabel(endDate);
+}
+
 /** Identifies the cleanest and peak 2-hour windows from an hourly AQI forecast array. */
 export function findTwoHourWindows(hourly: readonly HourlyPoint[]): {
   cleanest: TimeWindow | null;
@@ -200,23 +237,17 @@ export function findTwoHourWindows(hourly: readonly HourlyPoint[]): {
     }
   }
 
-  const endLabelFor = (index: number): string => {
-    const endDate = new Date(hourly[index + 1].timeIso);
-    endDate.setHours(endDate.getHours() + 1);
-    return Number.isNaN(endDate.getTime()) ? hourly[index + 1].hourLabel : formatHourLabel(endDate);
-  };
-
   return {
     cleanest: {
       startLabel: hourly[bestIdx].hourLabel,
-      endLabel: endLabelFor(bestIdx),
+      endLabel: buildEndHourLabel(hourly, bestIdx),
       startHour: hourly[bestIdx].hour24,
       timeOfDay: getTimeOfDaySlot(hourly[bestIdx].hour24),
       averageAqi: bestAvg,
     },
     worst: {
       startLabel: hourly[worstIdx].hourLabel,
-      endLabel: endLabelFor(worstIdx),
+      endLabel: buildEndHourLabel(hourly, worstIdx),
       startHour: hourly[worstIdx].hour24,
       timeOfDay: getTimeOfDaySlot(hourly[worstIdx].hour24),
       averageAqi: worstAvg,

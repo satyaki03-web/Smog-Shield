@@ -222,4 +222,52 @@ describe('Smog Shield React integration & WCAG accessibility', () => {
 
     await expectZeroAxeViolations(container);
   });
+
+  it('enforces strict heading hierarchy, labeled inputs/buttons, and aria-hidden decorative SVGs across tabs and modals', async () => {
+    stubFetch();
+    const user = userEvent.setup();
+    const { container } = render(<App />);
+
+    const assertHeadingHierarchyAndSvgs = () => {
+      const headings = Array.from(container.querySelectorAll('h1, h2, h3, h4, h5, h6'));
+      expect(headings.length).toBeGreaterThan(0);
+      expect(headings[0].tagName).toBe('H1');
+      let prevLevel = 1;
+      for (const heading of headings) {
+        const level = Number(heading.tagName.slice(1));
+        expect(level).toBeLessThanOrEqual(prevLevel + 1);
+        prevLevel = level;
+      }
+
+      const svgs = Array.from(container.querySelectorAll('svg'));
+      for (const svg of svgs) {
+        expect(svg).toHaveAttribute('aria-hidden', 'true');
+      }
+
+      const controls = Array.from(container.querySelectorAll('input, select, textarea'));
+      for (const control of controls) {
+        const id = control.getAttribute('id');
+        const hasLabel = Boolean(id && container.querySelector(`label[for="${id}"]`));
+        const hasAriaLabel = Boolean(control.getAttribute('aria-label') || control.getAttribute('aria-labelledby'));
+        expect(hasLabel || hasAriaLabel).toBe(true);
+      }
+
+      const buttons = Array.from(container.querySelectorAll('button'));
+      for (const btn of buttons) {
+        const accessibleName = (btn.getAttribute('aria-label') || btn.textContent || '').trim();
+        expect(accessibleName.length).toBeGreaterThan(0);
+      }
+    };
+
+    await screen.findByRole('tab', { name: 'Today' });
+    for (const tabName of ['Today', 'Routine', 'Indoor Air', 'Swaps', 'Ask']) {
+      await user.click(screen.getByRole('tab', { name: tabName }));
+      assertHeadingHierarchyAndSvgs();
+    }
+
+    // Verify Household modal headings, inputs, stepper buttons, and SVGs
+    await user.click(screen.getByRole('button', { name: 'Household' }));
+    assertHeadingHierarchyAndSvgs();
+    await user.keyboard('{Escape}');
+  });
 });

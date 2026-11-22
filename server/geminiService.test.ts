@@ -134,6 +134,34 @@ describe('server/geminiService model fallback chain and AbortController timeouts
     expect((result.body as { error: string }).error).toContain('took too long');
   });
 
+  it('returns a safe non-leaking error when every model in the fallback chain fails', async () => {
+    const calledModels: string[] = [];
+    const generateFn = vi.fn<GenerateContentFn>(async ({ model }) => {
+      calledModels.push(model);
+      throw new Error('503 SERVICE_UNAVAILABLE internal-secret-trace');
+    });
+
+    const result = await executeAskRequest(VALID_ASK_BODY, { generateFn });
+    expect(calledModels[0]).toBe('gemini-3.5-flash-lite');
+    expect(calledModels[1]).toBe('gemini-flash-latest');
+    expect(result.status).toBe(503);
+    expect((result.body as { error: string }).error).toContain('temporarily busy');
+    expect((result.body as { error: string }).error).not.toContain('internal-secret-trace');
+  });
+
+  it('aborts immediately with HTTP 499 when externalSignal is already aborted', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const generateFn = vi.fn<GenerateContentFn>(async () => 'Should not run');
+
+    const result = await executeAskRequest(VALID_ASK_BODY, {
+      generateFn,
+      externalSignal: controller.signal,
+    });
+    expect(result.status).toBe(499);
+    expect(generateFn).not.toHaveBeenCalled();
+  });
+
   it('validates and executes personalise requests through the same fallback chain', async () => {
     const bad = await executePersonaliseRequest({ context: { city: 'Delhi', aqi: -5 } });
     expect(bad.status).toBe(400);
@@ -183,6 +211,7 @@ describe('SlidingWindowRateLimiter and Netlify Functions security enforcement', 
     const badJsonRes = await handleAskNetlifyRequest(
       new Request('https://smogshield.example/api/gemini/ask', {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: '{malformed',
       }),
       { rateLimiter: new SlidingWindowRateLimiter() }

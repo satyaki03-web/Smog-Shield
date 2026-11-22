@@ -2,64 +2,87 @@
 
 Smog Shield is a calm, accessible urban air-quality and winter-smog planner built for families and Resident Welfare Associations (RWAs). It pairs live keyless Open-Meteo hourly air quality forecasts (mapped to Indian CPCB AQI bands) with a deterministic public-health rule engine, quantified personal and community impact tracking, and a server-proxied Gemini Q&A advisor.
 
-## Architecture
+## Tech Stack
 
-- `src/types/`: Strict TypeScript domain and API interfaces (zero `any`).
-- `src/constants/`: Curated Indian cities, CPCB defaults, diurnal baselines, and TTL/rate limits.
-- `src/domain/`: Pure, deterministic logic for CPCB band mapping (`aqi.ts`), dynamic time-of-day recommendations (`recommendations.ts`), quantified exposure/CO2e impact calculations (`impact.ts`), and Ask prompt/cache helpers (`ask.ts`).
-- `src/services/`: Open-Meteo client with 10-minute TTL caching and in-flight deduplication (`airQualityService.ts`) plus bounded Ask/Personalise API clients (`aiService.ts`).
-- `src/hooks/`: Reusable state and accessibility hooks (`useAqiData`, `useHouseholdProfile`, `useChecklist`, `useTheme`, `useFocusTrap`).
-- `src/components/`: Modular views (`Header`, `TodayTab`, `RoutineTab`, `IndoorAirTab`, `SwapsTab`, `AskTab`, `HourlyAqiChart`, `ImpactTrackerBanner`, `HouseholdModal`, `ChecklistModal`, `SettingsModal`, `ErrorBoundary`).
-- `server/`: Shared Gemini service (`geminiService.ts`) implementing the `gemini-3.5-flash-lite` (minimal thinking) -> `gemini-flash-latest` fallback chain with 10-second per-attempt `AbortController` timeouts, and shared security middleware (`security.ts`).
-- `netlify/functions/`: Production Netlify Functions (`ask.ts`, `personalise.ts`) reusing `server/geminiService.ts` and `server/security.ts` with zero code duplication.
+- **Frontend**: React 19, TypeScript 5 (strict mode), Vite 8, Tailwind CSS 4
+- **Backend / Serverless**: Express 4 (`server.ts` for local/Node hosting) and Netlify Functions v2 (`netlify/functions/`) sharing one server core (`server/`)
+- **AI Proxy**: `@google/genai` SDK with an ordered fallback chain (`gemini-3.5-flash-lite` with minimal thinking -> `gemini-flash-latest`) and strict 10-second per-attempt `AbortController` timeouts
+- **Testing & Quality**: Vitest 5, Testing Library, `axe-core` WCAG automated audits, ESLint 10 (`typescript-eslint`)
+
+## Project Structure
+
+```text
+.
+├── index.html                  # SPA entry point and typography links
+├── server.ts                   # Express dev/production server mounting Vite middleware
+├── netlify.toml                # Netlify build config, API rewrites, and security headers
+├── netlify/functions/          # Thin Netlify Function wrappers (ask.ts, personalise.ts)
+├── server/
+│   ├── geminiService.ts        # Shared request validation, prompt builder, and Gemini fallback chain
+│   ├── security.ts             # Shared CSP/security headers, rate limiter, and Netlify POST handler
+│   └── geminiService.test.ts   # Server, fallback, timeout, rate-limit, and Netlify handler tests
+└── src/
+    ├── types/                  # Strict TypeScript domain and API interfaces
+    ├── constants/              # Curated Indian cities, CPCB defaults, diurnal curves, TTLs
+    ├── domain/                 # Deterministic AQI bands, recommendations, impact, and Ask helpers
+    ├── services/               # Open-Meteo TTL-cached client and bounded Ask/Personalise clients
+    ├── hooks/                  # useAqiData, useHouseholdProfile, useChecklist, useTheme, useFocusTrap
+    ├── components/             # Modular tabs, hourly chart, impact banner, modals, ErrorBoundary
+    └── test/                   # Vitest jsdom setup
+```
+
+## Environment Variables
+
+Copy `.env.example` to `.env` for local development. Never prefix secrets with `VITE_`.
+
+| Variable | Required | Description |
+| --- | --- | --- |
+| `GEMINI_API_KEY` | For live AI answers | Server-side Google Gemini API key (read exclusively in `server/geminiService.ts`; falls back cleanly to deterministic Quick Guidance if absent). |
+| `PORT` | Optional | Local Express server port (defaults to `3000`). |
+| `DISABLE_HMR` | Optional | Set to `true` in proxied preview environments to disable dev HMR/WebSockets. |
 
 ## Local Development
 
-1. Install dependencies:
+1. Install dependencies (Node.js 22+ recommended):
    ```bash
    npm install
    ```
-2. Configure server secrets (never expose keys with `VITE_`):
+2. Configure environment variables:
    ```bash
    cp .env.example .env
-   # Set GEMINI_API_KEY in .env
+   # Add GEMINI_API_KEY in .env
    ```
 3. Start the full-stack Express + Vite server on port 3000:
    ```bash
    npm run dev
    ```
 
+## Scripts
+
+```bash
+npm run dev           # Start Express + Vite dev server on port 3000
+npm run start         # Run Express server against built dist/ bundle
+npx tsc --noEmit      # Run strict TypeScript typecheck
+npm run lint          # Run ESLint + strict TypeScript typecheck
+npm test              # Run Vitest unit, security, React integration, and axe-core tests
+npm run test:coverage # Run test suite with v8 coverage report
+npm run build         # Build production Vite bundle into dist/
+npm run preview       # Preview the built dist/ bundle locally
+npm run clean         # Remove build artifacts (dist/ and server.js)
+```
+
 ## Netlify Deployment
 
 `netlify.toml` is pre-configured for zero-config deployment:
 
-- Build command: `npm run build`
-- Publish directory: `dist`
-- Functions directory: `netlify/functions`
-- API rewrites: `/api/gemini/ask`, `/api/gemini/personalise`, and `/api/gemini/personalize` route to Netlify Functions before the SPA fallback.
-- Required Netlify Environment Variable: `GEMINI_API_KEY` (server-side only).
+- **Build command**: `npm run build`
+- **Publish directory**: `dist`
+- **Functions directory**: `netlify/functions`
+- **API rewrites**: `/api/gemini/ask`, `/api/gemini/personalise`, and `/api/gemini/personalize` route to Netlify Functions before the SPA fallback.
+- **Required Netlify environment variable**: `GEMINI_API_KEY` (server-side only).
 
-## Security Model
+## Security & Accessibility Highlights
 
-- **Server-Only Secrets**: `GEMINI_API_KEY` is read exclusively in `server/geminiService.ts` (Express & Netlify Functions) and never bundled into the client.
-- **Strict Headers**: Both Express and `netlify.toml` enforce `Content-Security-Policy` (restricting `connect-src` to `'self'` and `https://air-quality-api.open-meteo.com`), `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, `Permissions-Policy`, and `X-Frame-Options: DENY` in production.
-- **Input Validation & Abuse Controls**: 16 KB JSON body limit, runtime payload validation (1 to 500 char questions, AQI 0 to 500), control-character stripping with `<user_question>` prompt delimiters, and a per-IP sliding-window rate limiter (20 requests/minute with HTTP 429 + `Retry-After`).
-- **Safe Rendering**: Zero `dangerouslySetInnerHTML`; household profile, checklist, and swap selections stay locally in the user's browser.
-
-## Accessibility (WCAG 2.1 AA / AAA)
-
-- Visible-on-focus **Skip to main content** link and semantic landmarks (`<header>`, `<nav>`, `<main>`, `<footer>`).
-- Full WAI-ARIA `tablist` supporting `ArrowLeft`, `ArrowRight`, `Home`, and `End` keyboard navigation.
-- Focus-trapped modal dialogs (`Household`, `Checklist`, `Settings`) with `Escape` dismissal and automatic focus restoration.
-- Accessible **Next 24 Hours** AQI chart combining keyboard-focusable bars with a screen-reader-accessible data `<table>`.
-- Polite `aria-live` status announcements for AQI updates, Copy Plan feedback, and Ask progress.
-- **High Contrast** theme achieving >= 7:1 contrast with crisp 2px borders and full `prefers-reduced-motion` support.
-
-## Quality & Testing Commands
-
-```bash
-npm run lint          # Strict ESLint + TypeScript typecheck (tsc --noEmit)
-npm test              # Full Vitest unit, security, React integration, and axe-core suite
-npm run test:coverage # Run test suite with v8 coverage report
-npm run build         # Production Vite bundle
-```
+- **Server-Only Secrets**: `GEMINI_API_KEY` stays strictly server-side and is never exposed in client bundles.
+- **Defense in Depth**: Shared CSP, `X-Content-Type-Options: nosniff`, `Referrer-Policy`, `Permissions-Policy`, `X-Frame-Options: DENY` (in production), 16 KB body limit, runtime payload validation, `<user_question>` prompt isolation, and a 20 req/min sliding-window per-IP rate limiter.
+- **WCAG 2.1 AA / AAA**: Skip link, semantic landmarks, WAI-ARIA `tablist` keyboard navigation, focus-trapped modals with `Escape` dismissal, screen-reader data table alongside the 24-hour AQI chart, polite `aria-live` updates, Light/Dark/High Contrast themes, and `prefers-reduced-motion` support.

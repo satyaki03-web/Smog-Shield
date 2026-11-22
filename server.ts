@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import express, { type Request, type Response } from 'express';
+import express, { type Express, type Request, type Response } from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import {
@@ -11,8 +11,10 @@ import {
 import {
   buildSecurityHeaders,
   extractClientIp,
+  isJsonContentType,
   MAX_API_BODY_BYTES,
   SlidingWindowRateLimiter,
+  type JsonServiceExecutor,
 } from './server/security.ts';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -51,9 +53,7 @@ const NOOP_VITE_CLIENT = [
   'export class ErrorOverlay extends HTMLElement {}',
 ].join('\n');
 
-async function startServer(): Promise<void> {
-  const app = express();
-  const isDev = process.env.NODE_ENV !== 'production';
+function applySecurityMiddleware(app: Express, isDev: boolean): void {
   const allowIframe = isDev || process.env.DISABLE_HMR === 'true';
   const securityHeaders = buildSecurityHeaders({ isDev, allowIframe });
   const rateLimiter = new SlidingWindowRateLimiter();
@@ -91,7 +91,24 @@ async function startServer(): Promise<void> {
     }
     next();
   });
+}
 
+function createGeminiRouteHandler<T>(executor: JsonServiceExecutor<T>) {
+  return async (req: Request, res: Response): Promise<void> => {
+    const disconnectController = new AbortController();
+    res.on('close', () => {
+      if (!res.writableEnded) disconnectController.abort();
+    });
+    const result = await executor(req.body, {
+      externalSignal: disconnectController.signal,
+    });
+    if (!res.writableEnded) {
+      res.status(result.status).json(result.body);
+    }
+  };
+}
+
+function registerApiRoutes(app: Express): void {
   app.get('/api/health', (_req: Request, res: Response) => {
     res.json({
       ok: true,
@@ -100,35 +117,30 @@ async function startServer(): Promise<void> {
     });
   });
 
-  const handlePersonaliseRoute = async (req: Request, res: Response): Promise<void> => {
-    const disconnectController = new AbortController();
-    res.on('close', () => {
-      if (!res.writableEnded) disconnectController.abort();
-    });
-    const result = await executePersonaliseRequest(req.body, {
-      externalSignal: disconnectController.signal,
-    });
-    if (!res.writableEnded) {
-      res.status(result.status).json(result.body);
-    }
+  const handleMethodNotAllowed = (_req: Request, res: Response): void => {
+    res.setHeader('Allow', 'POST');
+    res.status(405).json({ error: 'Method not allowed.' });
   };
 
-  app.post('/api/gemini/personalise', handlePersonaliseRoute);
-  app.post('/api/gemini/personalize', handlePersonaliseRoute);
-
-  app.post('/api/gemini/ask', async (req: Request, res: Response) => {
-    const disconnectController = new AbortController();
-    res.on('close', () => {
-      if (!res.writableEnded) disconnectController.abort();
-    });
-    const result = await executeAskRequest(req.body, {
-      externalSignal: disconnectController.signal,
-    });
-    if (!res.writableEnded) {
-      res.status(result.status).json(result.body);
+  app.use('/api/gemini', (req: Request, res: Response, next: () => void) => {
+    if (req.method !== 'POST') {
+      handleMethodNotAllowed(req, res);
+      return;
     }
+    if (!isJsonContentType(req.headers['content-type'])) {
+      res.status(415).json({ error: 'Content-Type must be application/json.' });
+      return;
+    }
+    next();
   });
 
+  const handlePersonaliseRoute = createGeminiRouteHandler(executePersonaliseRequest);
+  app.post('/api/gemini/personalise', handlePersonaliseRoute);
+  app.post('/api/gemini/personalize', handlePersonaliseRoute);
+  app.post('/api/gemini/ask', createGeminiRouteHandler(executeAskRequest));
+}
+
+async function attachFrontendMiddleware(app: Express, isDev: boolean): Promise<void> {
   if (isDev) {
     const { createServer: createViteServer } = await import('vite');
     const disableHmr = process.env.DISABLE_HMR === 'true' || Boolean(process.env.K_SERVICE);
@@ -147,16 +159,26 @@ async function startServer(): Promise<void> {
     });
 
     app.use(vite.middlewares);
-  } else {
-    const distDir = path.resolve(__dirname, 'dist');
-    app.use(express.static(distDir));
-    app.get('*', (_req: Request, res: Response) => {
-      res.sendFile(path.join(distDir, 'index.html'));
-    });
+    return;
   }
 
+  const distDir = path.resolve(__dirname, 'dist');
+  app.use(express.static(distDir));
+  app.get('*', (_req: Request, res: Response) => {
+    res.sendFile(path.join(distDir, 'index.html'));
+  });
+}
+
+async function startServer(): Promise<void> {
+  const app = express();
+  const isDev = process.env.NODE_ENV !== 'production';
+
+  applySecurityMiddleware(app, isDev);
+  registerApiRoutes(app);
+  await attachFrontendMiddleware(app, isDev);
+
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Smog Shield server listening on http://0.0.0.0:${PORT}`);
+    process.stdout.write(`Smog Shield server listening on http://0.0.0.0:${PORT}\n`);
   });
 }
 
